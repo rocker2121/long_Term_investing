@@ -202,8 +202,7 @@ st.title("📊 S&P 500 Stock Analyzer")
 st.caption("AI-Powered Valuation, Price Targets & Sentiment Analysis")
 
 st.sidebar.header("🧭 Navigation")
-app_mode = st.sidebar.radio("Mode", ("Single Stock Analysis", "Multi-Stock Comparison",
-                                     "News Drilldown", "Valuation Rankings"))
+app_mode = st.sidebar.radio("Mode", ("Single Stock Analysis", "Multi-Stock Comparison", "Valuation Rankings"))
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("⚙️ Settings")
@@ -272,17 +271,11 @@ if app_mode == "Single Stock Analysis":
                     val_df = load_valuation_scores(val_path)
                     
                     if val_df.empty:
-                        st.markdown('<div style="background:#fff;padding:1.5rem;border-radius:12px;box-shadow:0 4px 6px rgba(0,0,0,.1);height:100%">',
-                                    unsafe_allow_html=True)
                         st.subheader("📊 Valuation Gauge")
                         st.info("Valuation data not available")
-                        st.markdown('</div>', unsafe_allow_html=True)
                     elif "Symbol" not in val_df.columns:
-                        st.markdown('<div style="background:#fff;padding:1.5rem;border-radius:12px;box-shadow:0 4px 6px rgba(0,0,0,.1);height:100%">',
-                                    unsafe_allow_html=True)
                         st.subheader("📊 Valuation Gauge")
                         st.error("❌ CSV missing 'Symbol' column")
-                        st.markdown('</div>', unsafe_allow_html=True)
                     else:
                         row = val_df[val_df["Symbol"].str.upper() == selected.upper()]
                         
@@ -290,8 +283,6 @@ if app_mode == "Single Stock Analysis":
                             score = float(row.iloc[0]["undervaluation_score"])
                             sector_name = row.iloc[0].get("Sector", row.iloc[0].get("GICS Sector", "Unknown"))
                             
-                            st.markdown('<div style="background:#fff;padding:1.5rem;border-radius:12px;box-shadow:0 4px 6px rgba(0,0,0,.1);height:100%">',
-                                        unsafe_allow_html=True)
                             st.subheader("📊 Valuation Gauge")
                             
                             badge = "success" if score <= 3 else "warning" if score <= 7 else "danger"
@@ -318,7 +309,6 @@ if app_mode == "Single Stock Analysis":
                             
                             st.markdown(f"<div style='margin-top:1rem;text-align:center'><strong style='font-size:1.5rem'>{score:.1f}/10</strong><br><span style='font-size:0.85rem;color:#6B7280'>Sector: {sector_name}</span></div>", 
                                        unsafe_allow_html=True)
-                            st.markdown('</div>', unsafe_allow_html=True)
                         else:
                             st.info(f"No valuation data for {selected}")
                             
@@ -326,56 +316,86 @@ if app_mode == "Single Stock Analysis":
                     st.warning(f"⚠️ Valuation: {str(e)}")
             
             with col_right:
-                st.markdown('<div style="background:#fff;padding:1.5rem;border-radius:12px;box-shadow:0 4px 6px rgba(0,0,0,.1);height:100%">',
-                            unsafe_allow_html=True)
                 st.subheader("⭐ Analyst Ratings")
                 try:
                     recs = ticker.recommendations_summary
                     if recs is not None and not recs.empty:
                         s = recs.iloc[-1]
-                        cols = [c for c in ["strongBuy","buy","hold","sell","strongSell"] if c in s.index]
-                        if cols:
-                            rating_data = []
-                            rating_labels = []
-                            rating_colors = []
-                            color_map = {
-                                "strongBuy": "#10B981",
-                                "buy": "#34D399", 
-                                "hold": "#FCD34D",
-                                "sell": "#FB923C",
-                                "strongSell": "#EF4444"
-                            }
-                            for c in cols:
-                                if s[c] > 0:
-                                    rating_data.append(int(s[c]))
-                                    rating_labels.append(c.replace("strong", "Strong "))
-                                    rating_colors.append(color_map.get(c, "#6B7280"))
+                        
+                        # Calculate weighted average rating (1=Strong Buy to 5=Strong Sell)
+                        rating_values = {
+                            "strongBuy": 1,
+                            "buy": 2,
+                            "hold": 3,
+                            "sell": 4,
+                            "strongSell": 5
+                        }
+                        
+                        total_ratings = 0
+                        weighted_sum = 0
+                        
+                        for rating_key, rating_val in rating_values.items():
+                            if rating_key in s.index and s[rating_key] > 0:
+                                count = int(s[rating_key])
+                                total_ratings += count
+                                weighted_sum += count * rating_val
+                        
+                        if total_ratings > 0:
+                            avg_rating = weighted_sum / total_ratings
                             
-                            if rating_data:
-                                fig = go.Figure(data=[go.Pie(
-                                    labels=rating_labels,
-                                    values=rating_data,
-                                    marker=dict(colors=rating_colors),
-                                    hole=0.4,
-                                    textposition='inside',
-                                    textinfo='label+percent'
-                                )])
-                                fig.update_layout(
-                                    showlegend=True,
-                                    height=280,
-                                    margin=dict(l=20, r=20, t=20, b=20),
-                                    legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5)
-                                )
-                                st.plotly_chart(fig, use_container_width=True)
+                            # Create barometer gauge
+                            st.markdown(f"""
+                            <div style="margin-top:1rem">
+                                <div style="display:flex;justify-content:space-between;font-size:0.75rem;color:#6B7280;margin-bottom:0.25rem">
+                                    <span>Strong Buy</span>
+                                    <span>Hold</span>
+                                    <span>Strong Sell</span>
+                                </div>
+                                <div style="width:100%;height:12px;background:linear-gradient(to right, #10B981, #34D399, #FCD34D, #FB923C, #EF4444);border-radius:6px;position:relative">
+                                    <div style="position:absolute;left:{(avg_rating-1)/4*100}%;top:-2px;width:20px;height:20px;background:#1F2937;border-radius:50%;border:3px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.3)"></div>
+                                </div>
+                                <div style="display:flex;justify-content:space-between;font-size:0.7rem;color:#9CA3AF;margin-top:0.5rem">
+                                    <span>1</span>
+                                    <span>2</span>
+                                    <span>3</span>
+                                    <span>4</span>
+                                    <span>5</span>
+                                </div>
+                            </div>
+                            """, unsafe_allow_html=True)
+                            
+                            # Show rating label
+                            if avg_rating <= 1.5:
+                                label = "Strong Buy"
+                                color = "#10B981"
+                            elif avg_rating <= 2.5:
+                                label = "Buy"
+                                color = "#34D399"
+                            elif avg_rating <= 3.5:
+                                label = "Hold"
+                                color = "#FCD34D"
+                            elif avg_rating <= 4.5:
+                                label = "Sell"
+                                color = "#FB923C"
                             else:
-                                st.info("No rating data")
+                                label = "Strong Sell"
+                                color = "#EF4444"
+                            
+                            st.markdown(f"<div style='margin-top:1rem;text-align:center'><strong style='font-size:1.5rem;color:{color}'>{label}</strong><br><span style='font-size:0.85rem;color:#6B7280'>Avg Rating: {avg_rating:.2f} | {total_ratings} analysts</span></div>", 
+                                       unsafe_allow_html=True)
+                            
+                            # Show breakdown
+                            with st.expander("📊 Rating Breakdown"):
+                                for rating_key in ["strongBuy", "buy", "hold", "sell", "strongSell"]:
+                                    if rating_key in s.index and s[rating_key] > 0:
+                                        label_name = rating_key.replace("strong", "Strong ")
+                                        st.write(f"**{label_name}:** {int(s[rating_key])}")
                         else:
-                            st.info("No rating columns")
+                            st.info("No rating data")
                     else:
                         st.info("No ratings available")
-                except:
-                    st.warning("⚠️ No ratings")
-                st.markdown('</div>', unsafe_allow_html=True)
+                except Exception as e:
+                    st.warning(f"⚠️ No ratings: {str(e)}")
         
         # NEWS SENTIMENT
         if selected not in index_dict:
@@ -420,6 +440,30 @@ if app_mode == "Single Stock Analysis":
                 fig.update_layout(title=f"{selected} - 5Y", xaxis_title="Date",
                     yaxis_title="Price", height=400, margin=dict(l=40, r=40, t=40, b=40))
                 st.plotly_chart(fig, use_container_width=True)
+        
+        # NEWS ARTICLES SECTION (moved from News Drilldown)
+        if selected not in index_dict and news_api_key and NewsApiClient:
+            st.markdown("---")
+            st.subheader("📰 Latest News & Analysis")
+            try:
+                _, _, _, articles = analyze_news_sentiment(news_api_key, company, 5)
+                if articles:
+                    st.caption(f"Found {len(articles)} forward-looking articles")
+                    for i, a in enumerate(articles[:10]):
+                        col1, col2 = st.columns([1, 4])
+                        with col1:
+                            if a.get("image_url"):
+                                st.image(a["image_url"], width=120)
+                        with col2:
+                            st.markdown(f"**[{a['title']}]({a['link']})**")
+                            st.caption(f"📰 {a['publisher']}")
+                        
+                        if i < min(9, len(articles) - 1):
+                            st.divider()
+                else:
+                    st.info("No recent articles found")
+            except Exception as e:
+                st.warning(f"Could not load news: {str(e)}")
 
 # MULTI-STOCK COMPARISON
 elif app_mode == "Multi-Stock Comparison":
@@ -454,30 +498,6 @@ elif app_mode == "Multi-Stock Comparison":
             fig.update_layout(title="Performance (%)", xaxis_title="Date",
                 yaxis_title="Return (%)", height=600)
             st.plotly_chart(fig, use_container_width=True)
-
-# NEWS DRILLDOWN
-elif app_mode == "News Drilldown":
-    st.header("📰 News Details")
-    if "selected_symbol" in st.session_state:
-        sym = st.session_state.selected_symbol
-        company = index_dict.get(sym) or sp500_df.set_index("Symbol")["Security"].get(sym, sym)
-        st.subheader(f"{company} ({sym})")
-        _, _, _, articles = analyze_news_sentiment(news_api_key, company, 5)
-        if articles:
-            for i, a in enumerate(articles):
-                c1, c2 = st.columns([1, 4])
-                with c1:
-                    if a.get("image_url"):
-                        st.image(a["image_url"], width=150)
-                with c2:
-                    st.markdown(f"**[{a['title']}]({a['link']})**")
-                    st.caption(f"📰 {a['publisher']}")
-                if i < len(articles) - 1:
-                    st.divider()
-        else:
-            st.warning("⚠️ No articles")
-    else:
-        st.info("👈 Select stock first")
 
 # VALUATION RANKINGS
 elif app_mode == "Valuation Rankings":
