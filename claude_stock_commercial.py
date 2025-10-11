@@ -29,9 +29,12 @@ st.markdown("""<style>
 html,body,.stApp{font-family:'Inter',sans-serif!important;background:#F9FAFB}
 h1{font-size:2.5rem!important;font-weight:700!important;background:linear-gradient(135deg,#667eea,#764ba2);
 -webkit-background-clip:text;-webkit-text-fill-color:transparent}
+h2,h3{color:#1F2937!important}
 [data-testid="stMetric"]{background:#fff;padding:1rem;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.1);border:1px solid #E5E7EB}
 [data-testid="stMetricValue"]{font-size:1.75rem!important;font-weight:700!important;color:#1F2937!important}
+[data-testid="stMetricLabel"]{color:#6B7280!important}
 div[data-testid="stExpander"]{background:#fff;border-radius:12px;border:1px solid #E5E7EB;margin-bottom:1rem}
+div[data-testid="stExpander"] p, div[data-testid="stExpander"] li{color:#1F2937!important}
 .stButton>button{background:linear-gradient(135deg,#667eea,#764ba2)!important;color:#fff!important;
 border:none!important;border-radius:8px!important;padding:.5rem 1.5rem!important;font-weight:600!important}
 .badge{display:inline-block;padding:.25rem .75rem;border-radius:9999px;font-size:.75rem;font-weight:600;text-transform:uppercase}
@@ -39,6 +42,20 @@ border:none!important;border-radius:8px!important;padding:.5rem 1.5rem!important
 .badge-warning{background:#FEF3C7;color:#92400E}
 .badge-danger{background:#FEE2E2;color:#991B1B}
 .compact-metric [data-testid="stMetricValue"]{font-size:1.2rem!important}
+/* Fix text visibility on mobile */
+p, span, div, label{color:#1F2937!important}
+.stMarkdown{color:#1F2937!important}
+[data-testid="stCaption"]{color:#6B7280!important}
+/* Ensure contrast in all containers */
+[data-testid="column"]{background:transparent!important}
+section[data-testid="stSidebar"]{background:#fff!important}
+section[data-testid="stSidebar"] label, section[data-testid="stSidebar"] p{color:#1F2937!important}
+/* Mobile responsive text */
+@media (max-width: 768px) {
+  h1{font-size:1.75rem!important}
+  h2{font-size:1.5rem!important}
+  h3{font-size:1.25rem!important}
+}
 </style>""", unsafe_allow_html=True)
 
 DEFAULT_VAL_PATH = "val_output/undervaluation_scored.csv"
@@ -317,16 +334,17 @@ if app_mode == "Single Stock Analysis":
                                 <div style="width:100%;height:8px;background:linear-gradient(to right, #10B981, #FCD34D, #EF4444);border-radius:4px;position:relative">
                                     <div style="position:absolute;left:{(score-1)/9*100}%;top:-4px;width:16px;height:16px;background:#1F2937;border-radius:50%;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.2)"></div>
                                 </div>
-                                <div style="display:flex;justify-content:space-between;font-size:0.7rem;color:#9CA3AF;margin-top:0.25rem">
+                                <div style="display:flex;justify-content:space-between;font-size:0.7rem;color:#9CA3AF;margin-top:0.5rem">
                                     <span>1</span>
                                     <span>5</span>
                                     <span>10</span>
                                 </div>
                             </div>
+                            <div style='margin-top:1rem;text-align:center;padding:1rem;background:#F9FAFB;border-radius:8px'>
+                                <div style='font-size:2rem;font-weight:700;color:#1F2937'>{score:.1f}<span style='font-size:1.2rem;color:#6B7280'>/10</span></div>
+                                <div style='font-size:0.9rem;color:#6B7280;margin-top:0.5rem'>Sector: {sector_name}</div>
+                            </div>
                             """, unsafe_allow_html=True)
-                            
-                            st.markdown(f"<div style='margin-top:1rem;text-align:center'><strong style='font-size:1.5rem'>{score:.1f}/10</strong><br><span style='font-size:0.85rem;color:#6B7280'>Sector: {sector_name}</span></div>", 
-                                       unsafe_allow_html=True)
                             
                             # Add explanation
                             with st.expander("ℹ️ How is this calculated?"):
@@ -422,8 +440,14 @@ if app_mode == "Single Stock Analysis":
                                 label = "Strong Sell"
                                 color = "#EF4444"
                             
-                            st.markdown(f"<div style='margin-top:1rem;text-align:center'><strong style='font-size:1.5rem;color:{color}'>{label}</strong><br><span style='font-size:0.85rem;color:#6B7280'>Avg Rating: {avg_rating:.2f} | {total_ratings} analysts</span></div>", 
-                                       unsafe_allow_html=True)
+                            st.markdown(f"""
+                            <div style='margin-top:1rem;text-align:center;padding:1rem;background:#F9FAFB;border-radius:8px'>
+                                <div style='font-size:1.75rem;font-weight:700;color:{color}'>{label}</div>
+                                <div style='font-size:0.9rem;color:#6B7280;margin-top:0.5rem'>
+                                    Avg Rating: {avg_rating:.2f} | {total_ratings} analysts
+                                </div>
+                            </div>
+                            """, unsafe_allow_html=True)
                             
                             # Show breakdown
                             with st.expander("📊 Rating Breakdown"):
