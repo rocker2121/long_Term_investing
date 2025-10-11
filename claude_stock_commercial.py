@@ -233,24 +233,13 @@ st.markdown("""
 st.sidebar.header("🧭 Navigation")
 app_mode = st.sidebar.radio("Mode", ("Single Stock Analysis", "Multi-Stock Comparison", "Top Undervalued Stocks"))
 
-st.sidebar.markdown("---")
-st.sidebar.subheader("⚙️ Settings")
-val_path = st.sidebar.text_input("Valuation CSV", DEFAULT_VAL_PATH)
-
+# Get API keys (hidden from UI)
 try:
     news_api_key = st.secrets.get("NEWS_API_KEY")
-    if news_api_key and NewsApiClient:
-        st.sidebar.success("✅ News API configured")
-    else:
-        st.sidebar.info("💡 News API: Not configured (optional)")
 except:
-    st.sidebar.info("💡 News API: Not configured (optional)")
     news_api_key = None
 
-if VADER_AVAILABLE:
-    st.sidebar.success("✅ VADER sentiment analysis ready")
-else:
-    st.sidebar.warning("⚠️ VADER not available")
+val_path = DEFAULT_VAL_PATH
 
 sp500_df = get_sp500_data()
 index_dict = {"^GSPC": "S&P 500", "^NDX": "Nasdaq-100"}
@@ -635,11 +624,7 @@ elif app_mode == "Top Undervalued Stocks":
 
 st.markdown("---")
 st.markdown("""
-<div style='text-align:center;color:#6B7280;font-size:0.85rem;padding:1rem'>
-    <strong>⚠️ Disclaimer:</strong> For personal, educational, and non-commercial use only. 
-    This is not financial advice. Always consult with a qualified financial advisor.<br>
-    <strong>Data Sources:</strong> Yahoo Finance, NewsAPI, Wikipedia | 
-    <strong>Built with:</strong> Streamlit, yfinance, Plotly, VADER Sentiment<br>
-    <strong>Created by:</strong> ANGAD ARORA
+<div style='text-align:center;color:#9CA3AF;font-size:0.8rem;padding:0.5rem'>
+    Built by ANGAD ARORA
 </div>
 """, unsafe_allow_html=True)
