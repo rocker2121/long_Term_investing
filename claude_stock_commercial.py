@@ -201,8 +201,37 @@ def fmt_float(x):
 st.title("📊 S&P 500 Stock Analyzer")
 st.caption("AI-Powered Valuation, Price Targets & Sentiment Analysis")
 
+# Legal disclaimer and credits
+st.markdown("""
+<div style='background:#FEF3C7;border-left:4px solid #F59E0B;padding:1rem;border-radius:8px;margin-bottom:1.5rem'>
+    <strong>⚠️ For Personal Use Only</strong><br>
+    This tool is for educational and personal research purposes only. Not intended for commercial use. 
+    Not financial advice. Always do your own research and consult with a financial advisor before making investment decisions.
+</div>
+""", unsafe_allow_html=True)
+
+st.markdown("""
+<details style='margin-bottom:1rem'>
+<summary style='cursor:pointer;color:#6B7280;font-size:0.85rem'>📚 Credits & Data Sources</summary>
+<div style='padding:0.5rem;font-size:0.85rem;color:#6B7280'>
+    <strong>Libraries & APIs:</strong><br>
+    • <a href="https://streamlit.io" target="_blank">Streamlit</a> - Interactive web framework<br>
+    • <a href="https://github.com/ranaroussi/yfinance" target="_blank">yfinance</a> - Yahoo Finance data<br>
+    • <a href="https://plotly.com" target="_blank">Plotly</a> - Interactive visualizations<br>
+    • <a href="https://github.com/cjhutto/vaderSentiment" target="_blank">VADER Sentiment</a> - News sentiment analysis<br>
+    • <a href="https://newsapi.org" target="_blank">NewsAPI</a> - News articles<br>
+    • <strong>pandas, numpy</strong> - Data processing<br><br>
+    <strong>Data Sources:</strong><br>
+    • Stock prices: Yahoo Finance<br>
+    • Analyst ratings: Yahoo Finance<br>
+    • News articles: NewsAPI.org<br>
+    • S&P 500 list: Wikipedia
+</div>
+</details>
+""", unsafe_allow_html=True)
+
 st.sidebar.header("🧭 Navigation")
-app_mode = st.sidebar.radio("Mode", ("Single Stock Analysis", "Multi-Stock Comparison", "Valuation Rankings"))
+app_mode = st.sidebar.radio("Mode", ("Single Stock Analysis", "Multi-Stock Comparison", "Top Undervalued Stocks"))
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("⚙️ Settings")
@@ -309,6 +338,29 @@ if app_mode == "Single Stock Analysis":
                             
                             st.markdown(f"<div style='margin-top:1rem;text-align:center'><strong style='font-size:1.5rem'>{score:.1f}/10</strong><br><span style='font-size:0.85rem;color:#6B7280'>Sector: {sector_name}</span></div>", 
                                        unsafe_allow_html=True)
+                            
+                            # Add explanation
+                            with st.expander("ℹ️ How is this calculated?"):
+                                st.markdown("""
+                                **Undervaluation Score Methodology:**
+                                
+                                The score (1-10) is calculated based on multiple valuation metrics:
+                                
+                                - **Price-to-Earnings (P/E) Ratio** - vs sector average
+                                - **Price-to-Book (P/B) Ratio** - vs historical values
+                                - **Price-to-Sales (P/S) Ratio** - vs competitors
+                                - **PEG Ratio** - P/E relative to growth rate
+                                - **Enterprise Value multiples** - EV/EBITDA, EV/Sales
+                                - **Dividend Yield** - compared to peers
+                                
+                                **Score Interpretation:**
+                                - **1-3**: Potentially undervalued (green zone)
+                                - **4-7**: Fairly valued (yellow zone)
+                                - **8-10**: Potentially overvalued (red zone)
+                                
+                                *Lower scores suggest better value, but always consider company fundamentals, 
+                                growth prospects, and market conditions. This is not financial advice.*
+                                """)
                         else:
                             st.info(f"No valuation data for {selected}")
                             
@@ -499,9 +551,9 @@ elif app_mode == "Multi-Stock Comparison":
                 yaxis_title="Return (%)", height=600)
             st.plotly_chart(fig, use_container_width=True)
 
-# VALUATION RANKINGS
-elif app_mode == "Valuation Rankings":
-    st.header("🏆 Rankings")
+# TOP UNDERVALUED STOCKS
+elif app_mode == "Top Undervalued Stocks":
+    st.header("🏆 Top Undervalued Stocks Right Now")
     
     try:
         val_df = load_valuation_scores(val_path)
@@ -514,17 +566,15 @@ elif app_mode == "Valuation Rankings":
         st.stop()
     
     sectors = ["All"] + sorted(val_df["Sector"].dropna().unique().tolist())
-    c1, c2, c3, c4, c5 = st.columns([2, 1, 1, 1, 1])
+    c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
     with c1:
         sector = st.selectbox("Sector", sectors)
     with c2:
-        mc_top = st.number_input("Top N Mkt", 0, 200, 0, 10)
+        mc_top = st.number_input("Top N by Market Cap", 0, 200, 0, 10)
     with c3:
-        view = st.selectbox("Sort", ["Undervalued", "Overvalued"])
+        top_n = st.selectbox("Show Top", [10, 20, 50, 100])
     with c4:
-        top_n = st.selectbox("Show", [10, 20, 50, 100])
-    with c5:
-        targets = st.checkbox("Targets", True)
+        targets = st.checkbox("Show Price Targets", True)
     
     c_reload, _ = st.columns([1, 5])
     with c_reload:
@@ -540,8 +590,8 @@ elif app_mode == "Valuation Rankings":
     if "mkt_cap" in df.columns and mc_top > 0:
         df = df.sort_values("mkt_cap", ascending=False).head(mc_top)
     
-    asc = view == "Undervalued"
-    df = df.sort_values("undervaluation_score", ascending=asc).reset_index(drop=True)
+    # Always sort by undervaluation (lowest score = most undervalued)
+    df = df.sort_values("undervaluation_score", ascending=True).reset_index(drop=True)
     df["Rank"] = range(1, len(df) + 1)
     out = df.head(top_n).copy()
     
@@ -571,18 +621,25 @@ elif app_mode == "Valuation Rankings":
     if "Upside" in disp.columns:
         disp["Upside"] = disp["Upside"].apply(fmt_pct)
     
-    st.subheader(f"Top {top_n} {view} {f'in {sector}' if sector != 'All' else ''}")
+    st.subheader(f"Top {top_n} Most Undervalued Stocks {f'in {sector}' if sector != 'All' else ''}")
     st.dataframe(disp, use_container_width=True, height=600, hide_index=True)
     
     if not out.empty:
-        fig = px.bar(out, x="Symbol", y="undervaluation_score", title="Scores",
+        fig = px.bar(out, x="Symbol", y="undervaluation_score", title="Undervaluation Scores (Lower = Better Value)",
             color="undervaluation_score", color_continuous_scale=["#10B981","#FCD34D","#EF4444"])
         fig.update_layout(showlegend=False, height=400)
         st.plotly_chart(fig, use_container_width=True)
     
-    st.download_button("⬇️ CSV", disp.to_csv(index=False),
-        f"rankings_{view.lower()}_{sector.replace(' ','_')}_top{top_n}.csv", "text/csv")
+    st.download_button("⬇️ Download CSV", disp.to_csv(index=False),
+        f"top_undervalued_{sector.replace(' ','_')}_top{top_n}.csv", "text/csv")
 
 st.markdown("---")
-st.caption("⚠️ For informational purposes only. Not financial advice.")
-st.caption("Built by ANGAD ARORA")
+st.markdown("""
+<div style='text-align:center;color:#6B7280;font-size:0.85rem;padding:1rem'>
+    <strong>⚠️ Disclaimer:</strong> For personal, educational, and non-commercial use only. 
+    This is not financial advice. Always consult with a qualified financial advisor.<br>
+    <strong>Data Sources:</strong> Yahoo Finance, NewsAPI, Wikipedia | 
+    <strong>Built with:</strong> Streamlit, yfinance, Plotly, VADER Sentiment<br>
+    <strong>Created by:</strong> ANGAD ARORA
+</div>
+""", unsafe_allow_html=True)
