@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""S&P 500 Stock Analyzer - Complete Working Version"""
+"""S&P 500 Stock Analyzer - Complete Working Version with VADER Sentiment"""
 
 import io
 from datetime import date, timedelta
@@ -12,9 +12,10 @@ import plotly.graph_objects as go
 import streamlit as st
 
 try:
-    from transformers import pipeline as hf_pipeline
+    from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+    VADER_AVAILABLE = True
 except:
-    hf_pipeline = None
+    VADER_AVAILABLE = False
 
 try:
     from newsapi import NewsApiClient
@@ -42,7 +43,7 @@ border:none!important;border-radius:8px!important;padding:.5rem 1.5rem!important
 
 DEFAULT_VAL_PATH = "val_output/undervaluation_scored.csv"
 
-@st.cache_data(ttl=86400)
+@st.cache_data(ttl=3600)
 def get_sp500_data():
     try:
         r = requests.get("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies",
@@ -57,30 +58,48 @@ def get_sp500_data():
         df["Symbol"] = df["Symbol"].str.replace(".", "-", regex=False)
         return df[["Symbol", "Security", "GICS Sector"]]
 
-@st.cache_data(ttl=86400)
+@st.cache_data(ttl=3600)
 def load_valuation_scores(csv_path):
-    df = pd.read_csv(csv_path)
-    if "ticker" in df.columns:
-        df["Symbol"] = df["ticker"]
-    if "sector" in df.columns:
-        df["GICS Sector"] = df["sector"]
-    sp = get_sp500_data()
-    df = df.merge(sp[["Symbol", "Security"]], on="Symbol", how="left")
-    if "GICS Sector" not in df.columns:
-        df = df.merge(sp[["Symbol", "GICS Sector"]], on="Symbol", how="left")
-    df["Sector"] = df.get("GICS Sector", "Unknown")
-    return df
+    try:
+        import os
+        if not os.path.exists(csv_path):
+            return pd.DataFrame()
+        
+        df = pd.read_csv(csv_path)
+        
+        # Normalize column names
+        if "ticker" in df.columns and "Symbol" not in df.columns:
+            df["Symbol"] = df["ticker"].str.upper()
+        elif "Ticker" in df.columns and "Symbol" not in df.columns:
+            df["Symbol"] = df["Ticker"].str.upper()
+        elif "Symbol" in df.columns:
+            df["Symbol"] = df["Symbol"].str.upper()
+        
+        if "sector" in df.columns and "GICS Sector" not in df.columns:
+            df["GICS Sector"] = df["sector"]
+        elif "Sector" in df.columns and "GICS Sector" not in df.columns:
+            df["GICS Sector"] = df["Sector"]
+        
+        sp = get_sp500_data()
+        if "Security" not in df.columns:
+            df = df.merge(sp[["Symbol", "Security"]], on="Symbol", how="left")
+        if "GICS Sector" not in df.columns:
+            df = df.merge(sp[["Symbol", "GICS Sector"]], on="Symbol", how="left")
+        
+        df["Sector"] = df.get("GICS Sector", "Unknown")
+        return df
+    except Exception as e:
+        st.error(f"Error loading valuation data: {e}")
+        return pd.DataFrame()
 
 @st.cache_resource
 def load_sentiment_model():
-    if hf_pipeline:
-        try:
-            return hf_pipeline("sentiment-analysis", model="ProsusAI/finbert")
-        except:
-            pass
+    """Load VADER sentiment analyzer"""
+    if VADER_AVAILABLE:
+        return SentimentIntensityAnalyzer()
     return None
 
-@st.cache_data(ttl=7200)
+@st.cache_data(ttl=1800)
 def analyze_news_sentiment(api_key, company_name, min_articles=5):
     if not api_key or not NewsApiClient:
         return "News API not configured.", "N/A", 0, []
@@ -90,6 +109,7 @@ def analyze_news_sentiment(api_key, company_name, min_articles=5):
         all_articles = newsapi.get_everything(
             q=f'"{company_name}" AND (earnings OR forecast OR guidance OR outlook OR analyst OR target OR upgrade OR downgrade)', 
             language="en", from_param=from_date, sort_by="relevancy", page_size=50)
+        
         if all_articles["totalResults"] == 0:
             return "No articles found.", "N/A", 0, []
         
@@ -122,16 +142,23 @@ def analyze_news_sentiment(api_key, company_name, min_articles=5):
         
         sentiment_model = load_sentiment_model()
         if not sentiment_model:
-            return "Sentiment unavailable.", "N/A", len(articles), article_list
+            return "Sentiment model unavailable.", "N/A", len(articles), article_list
         
-        pos, neg = 0, 0
+        # Use VADER for sentiment
+        pos, neg, neu = 0, 0, 0
         for a in articles[:20]:
             try:
-                result = sentiment_model(a["title"][:200])
-                if result[0]["label"] == "positive":
+                text = a["title"] + " " + (a.get("description") or "")
+                scores = sentiment_model.polarity_scores(text)
+                compound = scores['compound']
+                
+                # Compound score is between -1 (negative) and 1 (positive)
+                if compound >= 0.05:
                     pos += 1
-                elif result[0]["label"] == "negative":
+                elif compound <= -0.05:
                     neg += 1
+                else:
+                    neu += 1
             except:
                 pass
         
@@ -140,7 +167,7 @@ def analyze_news_sentiment(api_key, company_name, min_articles=5):
     except Exception as e:
         return f"Error: {e}", "N/A", 0, []
 
-@st.cache_data(ttl=21600, show_spinner=False)
+@st.cache_data(ttl=1800, show_spinner=False)
 def get_price_targets_cached(symbol):
     try:
         if symbol.startswith("^"):
@@ -170,41 +197,9 @@ def fmt_usd(x):
 def fmt_float(x):
     return f"{float(x):.2f}" if x is not None and not pd.isna(x) else "N/A"
 
-def render_valuation_gauge(score, sector):
-    st.markdown('<div style="background:#fff;padding:1.5rem;border-radius:12px;box-shadow:0 4px 6px rgba(0,0,0,.1);margin-bottom:1.5rem">',
-                unsafe_allow_html=True)
-    st.subheader("📊 Valuation Gauge")
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        badge = "success" if score <= 3 else "warning" if score <= 7 else "danger"
-        label = "Undervalued" if score <= 3 else "Fairly Valued" if score <= 7 else "Overvalued"
-        st.markdown(f'<span class="badge badge-{badge}">{label}</span>', unsafe_allow_html=True)
-        
-        st.markdown(f"""
-        <div style="margin-top:1rem">
-            <div style="display:flex;justify-content:space-between;font-size:0.75rem;color:#6B7280;margin-bottom:0.25rem">
-                <span>Undervalued</span>
-                <span>Fairly Valued</span>
-                <span>Overvalued</span>
-            </div>
-            <div style="width:100%;height:8px;background:linear-gradient(to right, #10B981, #FCD34D, #EF4444);border-radius:4px;position:relative">
-                <div style="position:absolute;left:{(score-1)/9*100}%;top:-4px;width:16px;height:16px;background:#1F2937;border-radius:50%;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.2)"></div>
-            </div>
-            <div style="display:flex;justify-content:space-between;font-size:0.7rem;color:#9CA3AF;margin-top:0.25rem">
-                <span>1</span>
-                <span>5</span>
-                <span>10</span>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-    with col2:
-        st.metric("Score", f"{score:.1f}/10")
-        st.caption(f"**Sector:** {sector}")
-    st.markdown('</div>', unsafe_allow_html=True)
-
 # MAIN APP
 st.title("📊 S&P 500 Stock Analyzer")
-st.caption("AI-Powered Valuation, Price Targets & Sentiment")
+st.caption("AI-Powered Valuation, Price Targets & Sentiment Analysis")
 
 st.sidebar.header("🧭 Navigation")
 app_mode = st.sidebar.radio("Mode", ("Single Stock Analysis", "Multi-Stock Comparison",
@@ -216,11 +211,18 @@ val_path = st.sidebar.text_input("Valuation CSV", DEFAULT_VAL_PATH)
 
 try:
     news_api_key = st.secrets.get("NEWS_API_KEY")
-    if news_api_key:
-        st.sidebar.success("✅ News API OK")
+    if news_api_key and NewsApiClient:
+        st.sidebar.success("✅ News API configured")
+    else:
+        st.sidebar.info("💡 News API: Not configured (optional)")
 except:
-    st.sidebar.info("💡 Add NEWS_API_KEY")
+    st.sidebar.info("💡 News API: Not configured (optional)")
     news_api_key = None
+
+if VADER_AVAILABLE:
+    st.sidebar.success("✅ VADER sentiment analysis ready")
+else:
+    st.sidebar.warning("⚠️ VADER not available")
 
 sp500_df = get_sp500_data()
 index_dict = {"^GSPC": "S&P 500", "^NDX": "Nasdaq-100"}
@@ -244,7 +246,7 @@ if app_mode == "Single Stock Analysis":
         st.header(f"📈 {company}")
         st.caption(f"**{selected}**")
         
-        # FINANCIAL METRICS FIRST (at the top)
+        # FINANCIAL METRICS
         if selected not in index_dict:
             with st.expander("💰 Financial Metrics", expanded=True):
                 try:
@@ -261,49 +263,67 @@ if app_mode == "Single Stock Analysis":
                 except:
                     st.warning("⚠️ Data unavailable")
         
-        # VALUATION GAUGE AND ANALYST RATINGS SIDE BY SIDE
+        # VALUATION GAUGE AND ANALYST RATINGS
         if selected not in index_dict:
             col_left, col_right = st.columns(2)
             
             with col_left:
                 try:
                     val_df = load_valuation_scores(val_path)
-                    row = val_df[val_df["Symbol"].str.upper() == selected.upper()]
-                    if not row.empty and "undervaluation_score" in row.columns:
-                        score = float(row.iloc[0]["undervaluation_score"])
-                        sector_name = row.iloc[0].get("Sector", "Unknown")
-                        
+                    
+                    if val_df.empty:
                         st.markdown('<div style="background:#fff;padding:1.5rem;border-radius:12px;box-shadow:0 4px 6px rgba(0,0,0,.1);height:100%">',
                                     unsafe_allow_html=True)
                         st.subheader("📊 Valuation Gauge")
-                        
-                        badge = "success" if score <= 3 else "warning" if score <= 7 else "danger"
-                        label = "Undervalued" if score <= 3 else "Fairly Valued" if score <= 7 else "Overvalued"
-                        st.markdown(f'<span class="badge badge-{badge}">{label}</span>', unsafe_allow_html=True)
-                        
-                        st.markdown(f"""
-                        <div style="margin-top:1rem">
-                            <div style="display:flex;justify-content:space-between;font-size:0.75rem;color:#6B7280;margin-bottom:0.25rem">
-                                <span>Undervalued</span>
-                                <span>Fairly Valued</span>
-                                <span>Overvalued</span>
-                            </div>
-                            <div style="width:100%;height:8px;background:linear-gradient(to right, #10B981, #FCD34D, #EF4444);border-radius:4px;position:relative">
-                                <div style="position:absolute;left:{(score-1)/9*100}%;top:-4px;width:16px;height:16px;background:#1F2937;border-radius:50%;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.2)"></div>
-                            </div>
-                            <div style="display:flex;justify-content:space-between;font-size:0.7rem;color:#9CA3AF;margin-top:0.25rem">
-                                <span>1</span>
-                                <span>5</span>
-                                <span>10</span>
-                            </div>
-                        </div>
-                        """, unsafe_allow_html=True)
-                        
-                        st.markdown(f"<div style='margin-top:1rem;text-align:center'><strong style='font-size:1.5rem'>{score:.1f}/10</strong><br><span style='font-size:0.85rem;color:#6B7280'>Sector: {sector_name}</span></div>", 
-                                   unsafe_allow_html=True)
+                        st.info("Valuation data not available")
                         st.markdown('</div>', unsafe_allow_html=True)
+                    elif "Symbol" not in val_df.columns:
+                        st.markdown('<div style="background:#fff;padding:1.5rem;border-radius:12px;box-shadow:0 4px 6px rgba(0,0,0,.1);height:100%">',
+                                    unsafe_allow_html=True)
+                        st.subheader("📊 Valuation Gauge")
+                        st.error("❌ CSV missing 'Symbol' column")
+                        st.markdown('</div>', unsafe_allow_html=True)
+                    else:
+                        row = val_df[val_df["Symbol"].str.upper() == selected.upper()]
+                        
+                        if not row.empty and "undervaluation_score" in row.columns:
+                            score = float(row.iloc[0]["undervaluation_score"])
+                            sector_name = row.iloc[0].get("Sector", row.iloc[0].get("GICS Sector", "Unknown"))
+                            
+                            st.markdown('<div style="background:#fff;padding:1.5rem;border-radius:12px;box-shadow:0 4px 6px rgba(0,0,0,.1);height:100%">',
+                                        unsafe_allow_html=True)
+                            st.subheader("📊 Valuation Gauge")
+                            
+                            badge = "success" if score <= 3 else "warning" if score <= 7 else "danger"
+                            label = "Undervalued" if score <= 3 else "Fairly Valued" if score <= 7 else "Overvalued"
+                            st.markdown(f'<span class="badge badge-{badge}">{label}</span>', unsafe_allow_html=True)
+                            
+                            st.markdown(f"""
+                            <div style="margin-top:1rem">
+                                <div style="display:flex;justify-content:space-between;font-size:0.75rem;color:#6B7280;margin-bottom:0.25rem">
+                                    <span>Undervalued</span>
+                                    <span>Fairly Valued</span>
+                                    <span>Overvalued</span>
+                                </div>
+                                <div style="width:100%;height:8px;background:linear-gradient(to right, #10B981, #FCD34D, #EF4444);border-radius:4px;position:relative">
+                                    <div style="position:absolute;left:{(score-1)/9*100}%;top:-4px;width:16px;height:16px;background:#1F2937;border-radius:50%;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.2)"></div>
+                                </div>
+                                <div style="display:flex;justify-content:space-between;font-size:0.7rem;color:#9CA3AF;margin-top:0.25rem">
+                                    <span>1</span>
+                                    <span>5</span>
+                                    <span>10</span>
+                                </div>
+                            </div>
+                            """, unsafe_allow_html=True)
+                            
+                            st.markdown(f"<div style='margin-top:1rem;text-align:center'><strong style='font-size:1.5rem'>{score:.1f}/10</strong><br><span style='font-size:0.85rem;color:#6B7280'>Sector: {sector_name}</span></div>", 
+                                       unsafe_allow_html=True)
+                            st.markdown('</div>', unsafe_allow_html=True)
+                        else:
+                            st.info(f"No valuation data for {selected}")
+                            
                 except Exception as e:
-                    st.warning(f"⚠️ Valuation: {e}")
+                    st.warning(f"⚠️ Valuation: {str(e)}")
             
             with col_right:
                 st.markdown('<div style="background:#fff;padding:1.5rem;border-radius:12px;box-shadow:0 4px 6px rgba(0,0,0,.1);height:100%">',
@@ -357,19 +377,23 @@ if app_mode == "Single Stock Analysis":
                     st.warning("⚠️ No ratings")
                 st.markdown('</div>', unsafe_allow_html=True)
         
-        # NEWS SENTIMENT (full width below)
+        # NEWS SENTIMENT
         if selected not in index_dict:
-            with st.expander("📰 News Sentiment (Forward-Looking)", expanded=True):
-                st.caption("Earnings, forecasts, guidance, analyst ratings - excludes daily price moves")
-                bull, bear, n, _ = analyze_news_sentiment(news_api_key, company, 5)
-                if isinstance(bull, str):
-                    st.warning(f"⚠️ {bull}")
-                else:
-                    c1, c2, c3 = st.columns(3)
-                    c1.metric("🟢 Bullish", f"{bull:.1f}%")
-                    c2.metric("🔴 Bearish", f"{bear:.1f}%")
-                    c3.metric("📊 Neutral", f"{100-bull-bear:.1f}%")
-                    st.caption(f"Based on {n} forward-looking articles")
+            if news_api_key and NewsApiClient:
+                with st.expander("📰 News Sentiment (VADER Analysis)", expanded=True):
+                    st.caption("Earnings, forecasts, guidance, analyst ratings - excludes daily price moves")
+                    bull, bear, n, _ = analyze_news_sentiment(news_api_key, company, 5)
+                    if isinstance(bull, str):
+                        st.info(f"ℹ️ {bull}")
+                    else:
+                        c1, c2, c3 = st.columns(3)
+                        c1.metric("🟢 Bullish", f"{bull:.1f}%")
+                        c2.metric("🔴 Bearish", f"{bear:.1f}%")
+                        c3.metric("📊 Neutral", f"{100-bull-bear:.1f}%")
+                        st.caption(f"Based on {n} forward-looking articles (VADER sentiment)")
+            else:
+                with st.expander("📰 News Sentiment", expanded=False):
+                    st.info("News API not configured. Add NEWS_API_KEY to Streamlit secrets.")
         
         # PRICE TARGETS
         if selected not in index_dict:
@@ -463,6 +487,10 @@ elif app_mode == "Valuation Rankings":
         val_df = load_valuation_scores(val_path)
     except Exception as e:
         st.error(f"❌ {e}")
+        st.stop()
+    
+    if val_df.empty:
+        st.warning("No valuation data available")
         st.stop()
     
     sectors = ["All"] + sorted(val_df["Sector"].dropna().unique().tolist())
