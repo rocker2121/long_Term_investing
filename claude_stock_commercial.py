@@ -33,8 +33,12 @@ h2,h3{color:#1F2937!important}
 [data-testid="stMetric"]{background:#fff;padding:1rem;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.1);border:1px solid #E5E7EB}
 [data-testid="stMetricValue"]{font-size:1.75rem!important;font-weight:700!important;color:#1F2937!important}
 [data-testid="stMetricLabel"]{color:#6B7280!important}
-div[data-testid="stExpander"]{background:#fff;border-radius:12px;border:1px solid #E5E7EB;margin-bottom:1rem}
-div[data-testid="stExpander"] p, div[data-testid="stExpander"] li{color:#1F2937!important}
+/* Fix expander styling - CRITICAL for mobile */
+div[data-testid="stExpander"]{background:#fff!important;border-radius:12px;border:1px solid #E5E7EB;margin-bottom:1rem}
+div[data-testid="stExpander"] summary{background:#fff!important;color:#1F2937!important;padding:1rem!important}
+div[data-testid="stExpander"] summary:hover{background:#F3F4F6!important}
+div[data-testid="stExpander"] div[data-testid="stExpanderDetails"]{background:#fff!important;padding:1rem!important}
+div[data-testid="stExpander"] p, div[data-testid="stExpander"] li, div[data-testid="stExpander"] span{color:#1F2937!important}
 .stButton>button{background:linear-gradient(135deg,#667eea,#764ba2)!important;color:#fff!important;
 border:none!important;border-radius:8px!important;padding:.5rem 1.5rem!important;font-weight:600!important}
 .badge{display:inline-block;padding:.25rem .75rem;border-radius:9999px;font-size:.75rem;font-weight:600;text-transform:uppercase}
@@ -42,7 +46,7 @@ border:none!important;border-radius:8px!important;padding:.5rem 1.5rem!important
 .badge-warning{background:#FEF3C7;color:#92400E}
 .badge-danger{background:#FEE2E2;color:#991B1B}
 .compact-metric [data-testid="stMetricValue"]{font-size:1.2rem!important}
-/* Fix text visibility on mobile */
+/* Fix text visibility */
 p, span, div, label{color:#1F2937!important}
 .stMarkdown{color:#1F2937!important}
 [data-testid="stCaption"]{color:#6B7280!important}
@@ -50,11 +54,16 @@ p, span, div, label{color:#1F2937!important}
 [data-testid="column"]{background:transparent!important}
 section[data-testid="stSidebar"]{background:#fff!important}
 section[data-testid="stSidebar"] label, section[data-testid="stSidebar"] p{color:#1F2937!important}
-/* Mobile responsive text */
+section[data-testid="stSidebar"] div[data-testid="stMarkdownContainer"] p{color:#1F2937!important}
+/* Fix radio button labels in sidebar */
+section[data-testid="stSidebar"] label[data-baseweb="radio"] > div:first-child{color:#1F2937!important}
+/* Mobile responsive */
 @media (max-width: 768px) {
   h1{font-size:1.75rem!important}
   h2{font-size:1.5rem!important}
   h3{font-size:1.25rem!important}
+  [data-testid="stMetric"]{padding:0.75rem!important}
+  [data-testid="stMetricValue"]{font-size:1.5rem!important}
 }
 </style>""", unsafe_allow_html=True)
 
