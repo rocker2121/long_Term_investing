@@ -30,33 +30,69 @@ html,body,.stApp{font-family:'Inter',sans-serif!important;background:#F9FAFB}
 h1{font-size:2.5rem!important;font-weight:700!important;background:linear-gradient(135deg,#667eea,#764ba2);
 -webkit-background-clip:text;-webkit-text-fill-color:transparent}
 h2,h3{color:#1F2937!important}
+
+/* Fix selectbox styling - CRITICAL */
+div[data-baseweb="select"] > div{background:#fff!important;color:#1F2937!important;border:1px solid #E5E7EB!important}
+div[data-baseweb="select"] span{color:#1F2937!important}
+div[data-baseweb="select"] svg{color:#1F2937!important}
+/* Dropdown menu */
+ul[role="listbox"]{background:#fff!important}
+ul[role="listbox"] li{background:#fff!important;color:#1F2937!important}
+ul[role="listbox"] li:hover{background:#F3F4F6!important}
+
+/* Fix metrics */
 [data-testid="stMetric"]{background:#fff;padding:1rem;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.1);border:1px solid #E5E7EB}
 [data-testid="stMetricValue"]{font-size:1.75rem!important;font-weight:700!important;color:#1F2937!important}
 [data-testid="stMetricLabel"]{color:#6B7280!important}
-/* Fix expander styling - CRITICAL for mobile */
+
+/* Fix expander styling */
 div[data-testid="stExpander"]{background:#fff!important;border-radius:12px;border:1px solid #E5E7EB;margin-bottom:1rem}
 div[data-testid="stExpander"] summary{background:#fff!important;color:#1F2937!important;padding:1rem!important}
 div[data-testid="stExpander"] summary:hover{background:#F3F4F6!important}
 div[data-testid="stExpander"] div[data-testid="stExpanderDetails"]{background:#fff!important;padding:1rem!important}
 div[data-testid="stExpander"] p, div[data-testid="stExpander"] li, div[data-testid="stExpander"] span{color:#1F2937!important}
+
+/* Buttons */
 .stButton>button{background:linear-gradient(135deg,#667eea,#764ba2)!important;color:#fff!important;
 border:none!important;border-radius:8px!important;padding:.5rem 1.5rem!important;font-weight:600!important}
+
+/* Badges */
 .badge{display:inline-block;padding:.25rem .75rem;border-radius:9999px;font-size:.75rem;font-weight:600;text-transform:uppercase}
 .badge-success{background:#D1FAE5;color:#065F46}
 .badge-warning{background:#FEF3C7;color:#92400E}
 .badge-danger{background:#FEE2E2;color:#991B1B}
 .compact-metric [data-testid="stMetricValue"]{font-size:1.2rem!important}
-/* Fix text visibility */
+
+/* Fix all text visibility */
 p, span, div, label{color:#1F2937!important}
 .stMarkdown{color:#1F2937!important}
 [data-testid="stCaption"]{color:#6B7280!important}
-/* Ensure contrast in all containers */
-[data-testid="column"]{background:transparent!important}
+
+/* Sidebar fixes - CRITICAL FOR MOBILE */
 section[data-testid="stSidebar"]{background:#fff!important}
-section[data-testid="stSidebar"] label, section[data-testid="stSidebar"] p{color:#1F2937!important}
+section[data-testid="stSidebar"] *{color:#1F2937!important}
+section[data-testid="stSidebar"] h2{color:#1F2937!important}
+section[data-testid="stSidebar"] label{color:#1F2937!important}
+section[data-testid="stSidebar"] p{color:#1F2937!important}
+section[data-testid="stSidebar"] span{color:#1F2937!important}
+section[data-testid="stSidebar"] div[data-testid="stMarkdownContainer"]{color:#1F2937!important}
 section[data-testid="stSidebar"] div[data-testid="stMarkdownContainer"] p{color:#1F2937!important}
-/* Fix radio button labels in sidebar */
-section[data-testid="stSidebar"] label[data-baseweb="radio"] > div:first-child{color:#1F2937!important}
+/* Fix radio buttons in sidebar */
+section[data-testid="stSidebar"] div[role="radiogroup"] label{color:#1F2937!important}
+section[data-testid="stSidebar"] div[role="radiogroup"] span{color:#1F2937!important}
+section[data-testid="stSidebar"] label[data-baseweb="radio"]{color:#1F2937!important}
+section[data-testid="stSidebar"] label[data-baseweb="radio"] > div{color:#1F2937!important}
+
+/* Input fields */
+input, textarea{background:#fff!important;color:#1F2937!important;border:1px solid #E5E7EB!important}
+
+/* Number input */
+div[data-baseweb="input"] > div{background:#fff!important}
+div[data-baseweb="input"] input{color:#1F2937!important}
+
+/* Checkbox */
+label[data-baseweb="checkbox"] span{color:#1F2937!important}
+
 /* Mobile responsive */
 @media (max-width: 768px) {
   h1{font-size:1.75rem!important}
@@ -224,7 +260,7 @@ def fmt_float(x):
     return f"{float(x):.2f}" if x is not None and not pd.isna(x) else "N/A"
 
 # MAIN APP
-st.title("📊 S&P 500 Stock Analyzer")
+st.title("📊 Key Stock Investment Metrics")
 st.caption("AI-Powered Valuation, Price Targets & Sentiment Analysis")
 
 # Legal disclaimer and credits
