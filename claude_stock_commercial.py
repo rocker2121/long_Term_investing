@@ -277,7 +277,7 @@ def fmt_float(x):
     return f"{float(x):.2f}" if x is not None and not pd.isna(x) else "N/A"
 
 # MAIN APP
-st.title("📊 Key Stock Investment Metrics")
+st.title("🔍 Key Stock Investment Metrics")
 st.caption("AI-Powered Valuation, Price Targets & Sentiment Analysis")
 
 # Legal disclaimer and credits
