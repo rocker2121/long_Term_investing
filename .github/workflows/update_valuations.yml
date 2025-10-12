@@ -1,0 +1,73 @@
+name: Update Quarterly Valuations
+
+on:
+  # Run automatically on Feb 1, May 1, Aug 1, Nov 1 at 2 AM UTC
+  schedule:
+    - cron: '0 2 1 2,5,8,11 *'
+  
+  # Also allow manual triggering from Actions tab
+  workflow_dispatch:
+
+jobs:
+  update-valuations:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          pip install pandas numpy requests
+      
+      - name: Create S&P 500 ticker list
+        run: |
+          python3 << 'EOF'
+          import pandas as pd
+          import requests
+          
+          # Get S&P 500 tickers from Wikipedia
+          url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+          tables = pd.read_html(url)
+          sp500 = tables[0]
+          sp500['Symbol'] = sp500['Symbol'].str.replace('.', '-', regex=False)
+          
+          # Save to CSV
+          sp500[['Symbol']].rename(columns={'Symbol': 'ticker'}).to_csv('sp500.csv', index=False)
+          print(f"Created sp500.csv with {len(sp500)} tickers")
+          EOF
+      
+      - name: Run valuation scoring
+        env:
+          ALPHA_VANTAGE_KEY: ${{ secrets.ALPHA_VANTAGE_KEY }}
+        run: |
+          python3 quarterly_valuation_scoring.py \
+            --universe_csv sp500.csv \
+            --now_date $(date +%Y-%m-%d) \
+            --price_vendor alpha_vantage \
+            --price_api_key "$ALPHA_VANTAGE_KEY" \
+            --outdir ./val_output \
+            --av_throttle_sec 1.0 \
+            --av_max_retries 3
+      
+      - name: Commit and push changes
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add val_output/
+          git diff --staged --quiet || git commit -m "chore: update quarterly valuations $(date +%Y-%m-%d)"
+          git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Upload artifacts (backup)
+        uses: actions/upload-artifact@v3
+        with:
+          name: valuation-data
+          path: val_output/
+          retention-days: 90
