@@ -27,6 +27,23 @@ st.set_page_config(page_title="S&P 500 Analyzer", page_icon="📊", layout="wide
 st.markdown("""<style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
 html,body,.stApp{font-family:'Inter',sans-serif!important;background:#F9FAFB}
+
+/* Fix top header bar */
+header[data-testid="stHeader"]{background:#fff!important}
+.stApp > header{background:#fff!important}
+button[kind="header"]{color:#1F2937!important}
+div[data-testid="stToolbar"]{background:#fff!important}
+
+/* Fix hamburger menu and buttons in header */
+button[data-testid="baseButton-header"]{color:#1F2937!important}
+button[data-testid="baseButton-header"] svg{color:#1F2937!important;fill:#1F2937!important}
+section[data-testid="stSidebarNav"]{background:#fff!important}
+
+/* Fix mobile menu */
+div[data-testid="stSidebarNavItems"]{background:#fff!important}
+div[data-testid="stSidebarNavItems"] a{color:#1F2937!important}
+div[data-testid="stSidebarNavItems"] span{color:#1F2937!important}
+
 h1{font-size:2.5rem!important;font-weight:700!important;background:linear-gradient(135deg,#667eea,#764ba2);
 -webkit-background-clip:text;-webkit-text-fill-color:transparent}
 h2,h3{color:#1F2937!important}
