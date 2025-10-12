@@ -48,14 +48,28 @@ h1{font-size:2.5rem!important;font-weight:700!important;background:linear-gradie
 -webkit-background-clip:text;-webkit-text-fill-color:transparent}
 h2,h3{color:#1F2937!important}
 
-/* Fix selectbox styling - CRITICAL */
+/* Fix selectbox styling - CRITICAL - More specific selectors */
+[data-baseweb="select"]{background:#fff!important}
+[data-baseweb="select"] > div{background:#fff!important;color:#1F2937!important;border:1px solid #E5E7EB!important}
+[data-baseweb="select"] [role="button"]{background:#fff!important;color:#1F2937!important}
+[data-baseweb="select"] input{background:#fff!important;color:#1F2937!important}
+[data-baseweb="select"] span{color:#1F2937!important}
+[data-baseweb="select"] svg{color:#1F2937!important;fill:#1F2937!important}
 div[data-baseweb="select"] > div{background:#fff!important;color:#1F2937!important;border:1px solid #E5E7EB!important}
 div[data-baseweb="select"] span{color:#1F2937!important}
 div[data-baseweb="select"] svg{color:#1F2937!important}
+
 /* Dropdown menu */
+[data-baseweb="popover"]{background:#fff!important}
 ul[role="listbox"]{background:#fff!important}
 ul[role="listbox"] li{background:#fff!important;color:#1F2937!important}
 ul[role="listbox"] li:hover{background:#F3F4F6!important}
+ul[role="listbox"] span{color:#1F2937!important}
+
+/* Fix the Select Stock label */
+label{color:#1F2937!important}
+.stSelectbox label{color:#1F2937!important}
+.stSelectbox > label{color:#1F2937!important}
 
 /* Fix metrics */
 [data-testid="stMetric"]{background:#fff;padding:1rem;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.1);border:1px solid #E5E7EB}
@@ -117,12 +131,18 @@ label[data-baseweb="checkbox"] span{color:#1F2937!important}
   h3{font-size:1.25rem!important}
   [data-testid="stMetric"]{padding:0.75rem!important}
   [data-testid="stMetricValue"]{font-size:1.5rem!important}
+  
+  /* Extra mobile fixes for selectbox */
+  [data-baseweb="select"] > div{
+    background:#fff!important;
+    color:#1F2937!important;
+  }
 }
 </style>""", unsafe_allow_html=True)
 
 DEFAULT_VAL_PATH = "val_output/undervaluation_scored.csv"
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3600)  # Cache for 1 hour
 def get_sp500_data():
     try:
         r = requests.get("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies",
@@ -178,7 +198,7 @@ def load_sentiment_model():
         return SentimentIntensityAnalyzer()
     return None
 
-@st.cache_data(ttl=1800)
+@st.cache_data(ttl=3600)  # 1 hour cache - fresher news with paid plan
 def analyze_news_sentiment(api_key, company_name, min_articles=5):
     if not api_key or not NewsApiClient:
         return "News API not configured.", "N/A", 0, []
@@ -246,7 +266,7 @@ def analyze_news_sentiment(api_key, company_name, min_articles=5):
     except Exception as e:
         return f"Error: {e}", "N/A", 0, []
 
-@st.cache_data(ttl=1800, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False)  # Cache for 1 hour
 def get_price_targets_cached(symbol):
     try:
         if symbol.startswith("^"):
