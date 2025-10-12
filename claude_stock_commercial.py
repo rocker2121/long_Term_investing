@@ -59,12 +59,25 @@ div[data-baseweb="select"] > div{background:#fff!important;color:#1F2937!importa
 div[data-baseweb="select"] span{color:#1F2937!important}
 div[data-baseweb="select"] svg{color:#1F2937!important}
 
-/* Dropdown menu */
+/* Dropdown menu - Multiple selectors to override everything */
 [data-baseweb="popover"]{background:#fff!important}
+[data-baseweb="popover"] > div{background:#fff!important}
+div[data-baseweb="popover"]{background:#fff!important}
 ul[role="listbox"]{background:#fff!important}
 ul[role="listbox"] li{background:#fff!important;color:#1F2937!important}
-ul[role="listbox"] li:hover{background:#F3F4F6!important}
+ul[role="listbox"] li:hover{background:#F3F4F6!important;color:#1F2937!important}
 ul[role="listbox"] span{color:#1F2937!important}
+ul[role="listbox"] div{color:#1F2937!important}
+/* Target the menu container */
+[role="listbox"]{background:#fff!important}
+[role="listbox"] *{color:#1F2937!important}
+/* Target layers */
+div[class*="layer"]{background:transparent!important}
+div[class*="Layer"]{background:transparent!important}
+/* Selectbox menu */
+.stSelectbox [role="listbox"]{background:#fff!important}
+.stSelectbox ul{background:#fff!important}
+.stSelectbox li{background:#fff!important;color:#1F2937!important}
 
 /* Fix the Select Stock label */
 label{color:#1F2937!important}
@@ -137,7 +150,25 @@ label[data-baseweb="checkbox"] span{color:#1F2937!important}
     background:#fff!important;
     color:#1F2937!important;
   }
+  
+  /* Force all dropdown menus white on mobile */
+  [role="listbox"]{background:#fff!important}
+  [role="listbox"] li{background:#fff!important;color:#1F2937!important}
+  [role="listbox"] *{color:#1F2937!important}
+  ul{background:#fff!important}
+  li{background:#fff!important;color:#1F2937!important}
 }
+
+/* NUCLEAR OPTION - Override all Streamlit layers and portals */
+body > div[class*="layer"],
+body > div[class*="Layer"],
+#root > div[class*="layer"],
+[data-baseweb="layer"]{
+  background:transparent!important;
+}
+[data-baseweb="menu"]{background:#fff!important}
+[data-baseweb="menu"] ul{background:#fff!important}
+[data-baseweb="menu"] li{background:#fff!important;color:#1F2937!important}
 </style>""", unsafe_allow_html=True)
 
 DEFAULT_VAL_PATH = "val_output/undervaluation_scored.csv"
