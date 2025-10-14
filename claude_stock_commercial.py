@@ -25,42 +25,17 @@ except:
 
 st.set_page_config(page_title="S&P 500 Analyzer", page_icon="📊", layout="wide")
 
-# Google Analytics Integration
-def inject_ga():
-    """Inject Google Analytics tracking code"""
-    GA_ID = "G-598BZYJEBM"  # Your actual Measurement ID
-    
-    ga_code = f"""
-    <!-- Google tag (gtag.js) -->
-    <script async src="https://www.googletagmanager.com/gtag/js?id={GA_ID}"></script>
-    <script>
-      window.dataLayer = window.dataLayer || [];
-      function gtag(){{dataLayer.push(arguments);}}
-      gtag('js', new Date());
-      gtag('config', '{GA_ID}');
-    </script>
-    """
-    components.html(ga_code, height=0)
-
-# Initialize Google Analytics
-inject_ga()
-
-# Track custom events
-def track_event(event_name, event_params=None):
-    """Track custom events in Google Analytics"""
-    if event_params is None:
-        event_params = {}
-    
-    params_str = ", ".join([f"'{k}': '{v}'" for k, v in event_params.items()])
-    
-    ga_event = f"""
-    <script>
-      if (typeof gtag !== 'undefined') {{
-        gtag('event', '{event_name}', {{{params_str}}});
-      }}
-    </script>
-    """
-    components.html(ga_event, height=0)
+# Google Analytics - Simple direct injection
+components.html("""
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-598BZYJEBM"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-598BZYJEBM');
+</script>
+""", height=0)
 
 # Force light theme at root level
 st.markdown("""
@@ -290,7 +265,7 @@ body > div[class*="Layer"],
 
 DEFAULT_VAL_PATH = "val_output/undervaluation_scored.csv"
 
-@st.cache_data(ttl=3600)  # Cache for 1 hour
+@st.cache_data(ttl=3600)
 def get_sp500_data():
     try:
         r = requests.get("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies",
@@ -346,7 +321,7 @@ def load_sentiment_model():
         return SentimentIntensityAnalyzer()
     return None
 
-@st.cache_data(ttl=21600)  # 6 hours cache instead of 1 hour
+@st.cache_data(ttl=21600)
 def analyze_news_sentiment(api_key, company_name, min_articles=5):
     if not api_key or not NewsApiClient:
         return "News API not configured.", "N/A", 0, []
@@ -356,6 +331,11 @@ def analyze_news_sentiment(api_key, company_name, min_articles=5):
         all_articles = newsapi.get_everything(
             q=f'"{company_name}" AND (earnings OR forecast OR guidance OR outlook OR analyst OR target OR upgrade OR downgrade)', 
             language="en", from_param=from_date, sort_by="relevancy", page_size=50)
+        
+        # Check for rate limit error
+        if isinstance(all_articles, dict) and all_articles.get("status") == "error":
+            if "rate limit" in str(all_articles.get("message", "")).lower():
+                return "Daily news limit reached. Try again tomorrow.", "N/A", 0, []
         
         if all_articles["totalResults"] == 0:
             return "No articles found.", "N/A", 0, []
@@ -414,7 +394,7 @@ def analyze_news_sentiment(api_key, company_name, min_articles=5):
     except Exception as e:
         return f"Error: {e}", "N/A", 0, []
 
-@st.cache_data(ttl=3600, show_spinner=False)  # Cache for 1 hour
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_price_targets_cached(symbol):
     try:
         if symbol.startswith("^"):
@@ -506,10 +486,16 @@ if app_mode == "Single Stock Analysis":
     
     # Track stock selection in Google Analytics
     if selected:
-        track_event('stock_view', {
-            'stock_symbol': selected,
-            'mode': 'single_stock'
-        })
+        components.html(f"""
+        <script>
+          if (typeof gtag !== 'undefined') {{
+            gtag('event', 'stock_view', {{
+              'stock_symbol': '{selected}',
+              'mode': 'single_stock'
+            }});
+          }}
+        </script>
+        """, height=0)
     
     if selected:
         ticker = yf.Ticker(selected)
@@ -702,7 +688,7 @@ if app_mode == "Single Stock Analysis":
         # NEWS SENTIMENT
         if selected not in index_dict:
             if news_api_key and NewsApiClient:
-                with st.expander("📰 News Sentiment (VADER Analysis)", expanded=False):  # Collapsed by default
+                with st.expander("📰 News Sentiment (VADER Analysis)", expanded=False):
                     st.caption("Earnings, forecasts, guidance, analyst ratings - excludes daily price moves")
                     bull, bear, n, _ = analyze_news_sentiment(news_api_key, company, 5)
                     if isinstance(bull, str):
@@ -746,7 +732,7 @@ if app_mode == "Single Stock Analysis":
                     yaxis_title="Price", height=400, margin=dict(l=40, r=40, t=40, b=40))
                 st.plotly_chart(fig, use_container_width=True)
         
-        # NEWS ARTICLES SECTION (moved from News Drilldown)
+        # NEWS ARTICLES SECTION
         if selected not in index_dict and news_api_key and NewsApiClient:
             st.markdown("---")
             st.subheader("📰 Latest News & Analysis")
