@@ -24,6 +24,14 @@ except:
 
 st.set_page_config(page_title="S&P 500 Analyzer", page_icon="📊", layout="wide")
 
+# Force light theme at root level
+st.markdown("""
+<script>
+// Force light theme by overriding Streamlit's theme detection
+window.parent.document.documentElement.setAttribute('data-theme', 'light');
+</script>
+""", unsafe_allow_html=True)
+
 st.markdown("""<style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
 html,body,.stApp{font-family:'Inter',sans-serif!important;background:#F9FAFB}
@@ -58,6 +66,51 @@ h2,h3{color:#1F2937!important}
 div[data-baseweb="select"] > div{background:#fff!important;color:#1F2937!important;border:1px solid #E5E7EB!important}
 div[data-baseweb="select"] span{color:#1F2937!important}
 div[data-baseweb="select"] svg{color:#1F2937!important}
+/* Force all select boxes */
+.stSelectbox > div > div{background:#fff!important;color:#1F2937!important}
+.stSelectbox [data-baseweb="select"]{background:#fff!important}
+.stSelectbox label{color:#1F2937!important}
+
+/* Multi-select styling */
+.stMultiSelect > div > div{background:#fff!important;color:#1F2937!important}
+.stMultiSelect [data-baseweb="select"]{background:#fff!important}
+.stMultiSelect label{color:#1F2937!important}
+.stMultiSelect span{color:#1F2937!important}
+.stMultiSelect [data-baseweb="tag"]{background:#E5E7EB!important;color:#1F2937!important}
+
+/* Number input styling */
+.stNumberInput > div > div{background:#fff!important;color:#1F2937!important;border:1px solid #E5E7EB!important}
+.stNumberInput input{background:#fff!important;color:#1F2937!important}
+.stNumberInput label{color:#1F2937!important}
+.stNumberInput button{background:#fff!important;color:#1F2937!important;border:1px solid #E5E7EB!important}
+.stNumberInput [data-baseweb="input"]{background:#fff!important}
+.stNumberInput [data-baseweb="input"] > div{background:#fff!important}
+.stNumberInput [data-baseweb="input"] input{background:#fff!important;color:#1F2937!important}
+
+/* Date input styling */
+.stDateInput > div > div{background:#fff!important;color:#1F2937!important;border:1px solid #E5E7EB!important}
+.stDateInput input{background:#fff!important;color:#1F2937!important}
+.stDateInput label{color:#1F2937!important}
+
+/* Text input styling */
+.stTextInput > div > div{background:#fff!important;color:#1F2937!important;border:1px solid #E5E7EB!important}
+.stTextInput input{background:#fff!important;color:#1F2937!important}
+.stTextInput label{color:#1F2937!important}
+
+/* Checkbox styling */
+.stCheckbox{color:#1F2937!important}
+.stCheckbox > label{color:#1F2937!important}
+.stCheckbox span{color:#1F2937!important}
+
+/* Radio button styling */
+.stRadio > label{color:#1F2937!important}
+.stRadio [role="radiogroup"]{color:#1F2937!important}
+.stRadio [role="radiogroup"] label{color:#1F2937!important}
+.stRadio [role="radiogroup"] span{color:#1F2937!important}
+
+/* Slider styling */
+.stSlider > label{color:#1F2937!important}
+.stSlider [data-baseweb="slider"]{background:#fff!important}
 
 /* Dropdown menu - Multiple selectors to override everything */
 [data-baseweb="popover"]{background:#fff!important}
@@ -78,6 +131,15 @@ div[class*="Layer"]{background:transparent!important}
 .stSelectbox [role="listbox"]{background:#fff!important}
 .stSelectbox ul{background:#fff!important}
 .stSelectbox li{background:#fff!important;color:#1F2937!important}
+/* Extra layer targeting */
+div[data-baseweb="menu"]{background:#fff!important}
+div[data-baseweb="menu"] > div{background:#fff!important}
+div[data-baseweb="menu"] ul{background:#fff!important}
+div[data-baseweb="menu"] li{background:#fff!important;color:#1F2937!important}
+
+/* Calendar/date picker dropdown */
+[data-baseweb="calendar"]{background:#fff!important;color:#1F2937!important}
+[data-baseweb="calendar"] *{color:#1F2937!important}
 
 /* Fix the Select Stock label */
 label{color:#1F2937!important}
@@ -229,7 +291,7 @@ def load_sentiment_model():
         return SentimentIntensityAnalyzer()
     return None
 
-@st.cache_data(ttl=3600)  # 1 hour cache - fresher news with paid plan
+@st.cache_data(ttl=21600)  # 6 hours cache instead of 1 hour
 def analyze_news_sentiment(api_key, company_name, min_articles=5):
     if not api_key or not NewsApiClient:
         return "News API not configured.", "N/A", 0, []
@@ -578,11 +640,14 @@ if app_mode == "Single Stock Analysis":
         # NEWS SENTIMENT
         if selected not in index_dict:
             if news_api_key and NewsApiClient:
-                with st.expander("📰 News Sentiment (VADER Analysis)", expanded=True):
+                with st.expander("📰 News Sentiment (VADER Analysis)", expanded=False):  # Collapsed by default
                     st.caption("Earnings, forecasts, guidance, analyst ratings - excludes daily price moves")
                     bull, bear, n, _ = analyze_news_sentiment(news_api_key, company, 5)
                     if isinstance(bull, str):
-                        st.info(f"ℹ️ {bull}")
+                        if "limit reached" in bull.lower():
+                            st.warning(f"ℹ️ {bull}")
+                        else:
+                            st.info(f"ℹ️ {bull}")
                     else:
                         c1, c2, c3 = st.columns(3)
                         c1.metric("🟢 Bullish", f"{bull:.1f}%")
