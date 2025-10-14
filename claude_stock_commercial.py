@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""S&P 500 Stock Analyzer - Complete Working Version with VADER Sentiment"""
+"""S&P 500 Stock Analyzer - Complete Working Version with VADER Sentiment + GA top-level injection"""
 
 import io
 from datetime import date, timedelta
@@ -10,7 +10,6 @@ import yfinance as yf
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
-import streamlit.components.v1 as components
 
 try:
     from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
@@ -25,17 +24,20 @@ except:
 
 st.set_page_config(page_title="S&P 500 Analyzer", page_icon="📊", layout="wide")
 
-# Google Analytics - Simple direct injection
-components.html("""
+# -------------------------------------------
+# Google Analytics (GA4) - Inject into top page (NOT an iframe)
+# -------------------------------------------
+st.markdown("""
 <!-- Google tag (gtag.js) -->
 <script async src="https://www.googletagmanager.com/gtag/js?id=G-598BZYJEBM"></script>
 <script>
   window.dataLayer = window.dataLayer || [];
-  function gtag(){dataLayer.push(arguments);}
+  function gtag(){ dataLayer.push(arguments); }
   gtag('js', new Date());
-  gtag('config', 'G-598BZYJEBM');
+  // DebugView enabled; remove 'debug_mode' in production if desired
+  gtag('config', 'G-598BZYJEBM', { 'debug_mode': true });
 </script>
-""", height=0)
+""", unsafe_allow_html=True)
 
 # Force light theme at root level
 st.markdown("""
@@ -49,20 +51,11 @@ st.markdown("""<style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
 
 /* NUCLEAR OPTION - Force everything to light mode */
-* {
-  color-scheme: light !important;
-}
-html, body, #root, .stApp {
-  color-scheme: light !important;
-  background: #F9FAFB !important;
-}
+* { color-scheme: light !important; }
+html, body, #root, .stApp { color-scheme: light !important; background: #F9FAFB !important; }
 /* Force Streamlit container to light */
-[data-testid="stAppViewContainer"] {
-  background: #F9FAFB !important;
-}
-[data-testid="stApp"] {
-  background: #F9FAFB !important;
-}
+[data-testid="stAppViewContainer"] { background: #F9FAFB !important; }
+[data-testid="stApp"] { background: #F9FAFB !important; }
 
 html,body,.stApp{font-family:'Inter',sans-serif!important;background:#F9FAFB}
 
@@ -236,13 +229,8 @@ label[data-baseweb="checkbox"] span{color:#1F2937!important}
   h3{font-size:1.25rem!important}
   [data-testid="stMetric"]{padding:0.75rem!important}
   [data-testid="stMetricValue"]{font-size:1.5rem!important}
-  
   /* Extra mobile fixes for selectbox */
-  [data-baseweb="select"] > div{
-    background:#fff!important;
-    color:#1F2937!important;
-  }
-  
+  [data-baseweb="select"] > div{ background:#fff!important; color:#1F2937!important; }
   /* Force all dropdown menus white on mobile */
   [role="listbox"]{background:#fff!important}
   [role="listbox"] li{background:#fff!important;color:#1F2937!important}
@@ -286,9 +274,8 @@ def load_valuation_scores(csv_path):
         import os
         if not os.path.exists(csv_path):
             return pd.DataFrame()
-        
         df = pd.read_csv(csv_path)
-        
+
         # Normalize column names
         if "ticker" in df.columns and "Symbol" not in df.columns:
             df["Symbol"] = df["ticker"].str.upper()
@@ -296,18 +283,18 @@ def load_valuation_scores(csv_path):
             df["Symbol"] = df["Ticker"].str.upper()
         elif "Symbol" in df.columns:
             df["Symbol"] = df["Symbol"].str.upper()
-        
+
         if "sector" in df.columns and "GICS Sector" not in df.columns:
             df["GICS Sector"] = df["sector"]
         elif "Sector" in df.columns and "GICS Sector" not in df.columns:
             df["GICS Sector"] = df["Sector"]
-        
+
         sp = get_sp500_data()
         if "Security" not in df.columns:
             df = df.merge(sp[["Symbol", "Security"]], on="Symbol", how="left")
         if "GICS Sector" not in df.columns:
             df = df.merge(sp[["Symbol", "GICS Sector"]], on="Symbol", how="left")
-        
+
         df["Sector"] = df.get("GICS Sector", "Unknown")
         return df
     except Exception as e:
@@ -331,15 +318,15 @@ def analyze_news_sentiment(api_key, company_name, min_articles=5):
         all_articles = newsapi.get_everything(
             q=f'"{company_name}" AND (earnings OR forecast OR guidance OR outlook OR analyst OR target OR upgrade OR downgrade)', 
             language="en", from_param=from_date, sort_by="relevancy", page_size=50)
-        
+
         # Check for rate limit error
         if isinstance(all_articles, dict) and all_articles.get("status") == "error":
             if "rate limit" in str(all_articles.get("message", "")).lower():
                 return "Daily news limit reached. Try again tomorrow.", "N/A", 0, []
-        
+
         if all_articles["totalResults"] == 0:
             return "No articles found.", "N/A", 0, []
-        
+
         exclude_keywords = ['up', 'down', 'gains', 'falls', 'rises', 'drops', 'climbs', 'slides', 
                           'jumps', 'dips', 'rallies', 'plunges', 'surges', 'tumbles', 'soars',
                           'today', 'yesterday', 'trading', 'premarket', 'afterhours']
@@ -347,30 +334,30 @@ def analyze_news_sentiment(api_key, company_name, min_articles=5):
                           'estimate', 'consensus', 'upgrade', 'downgrade', 'rating', 'analyst',
                           'quarter', 'earnings', 'revenue', 'fy2024', 'fy2025', 'next year',
                           'growth', 'expansion', 'strategy', 'future', 'plans']
-        
+
         articles = []
         for a in all_articles["articles"][:40]:
             title_lower = a["title"].lower()
             desc_lower = (a.get("description") or "").lower()
             combined = title_lower + " " + desc_lower
-            
+
             if any(kw in combined for kw in exclude_keywords):
                 continue
-            
+
             if any(kw in combined for kw in forward_keywords):
                 articles.append(a)
-        
+
         article_list = [{"title": a["title"], "link": a["url"],
                         "publisher": a["source"]["name"], "image_url": a.get("urlToImage")}
                        for a in articles]
-        
+
         if len(articles) < min_articles:
             return f"Only {len(articles)} forward-looking articles", "N/A", len(articles), article_list
-        
+
         sentiment_model = load_sentiment_model()
         if not sentiment_model:
             return "Sentiment model unavailable.", "N/A", len(articles), article_list
-        
+
         # Use VADER for sentiment
         pos, neg, neu = 0, 0, 0
         for a in articles[:20]:
@@ -378,8 +365,7 @@ def analyze_news_sentiment(api_key, company_name, min_articles=5):
                 text = a["title"] + " " + (a.get("description") or "")
                 scores = sentiment_model.polarity_scores(text)
                 compound = scores['compound']
-                
-                # Compound score is between -1 (negative) and 1 (positive)
+
                 if compound >= 0.05:
                     pos += 1
                 elif compound <= -0.05:
@@ -388,7 +374,7 @@ def analyze_news_sentiment(api_key, company_name, min_articles=5):
                     neu += 1
             except:
                 pass
-        
+
         total = min(20, len(articles))
         return (pos/total*100, neg/total*100, total, article_list)
     except Exception as e:
@@ -471,38 +457,47 @@ val_path = DEFAULT_VAL_PATH
 sp500_df = get_sp500_data()
 index_dict = {"^GSPC": "S&P 500", "^NDX": "Nasdaq-100"}
 
+# Initialize GA de-dupe key
+if "last_tracked_symbol" not in st.session_state:
+    st.session_state["last_tracked_symbol"] = None
+
 # SINGLE STOCK ANALYSIS
 if app_mode == "Single Stock Analysis":
     st.subheader("🔍 Stock Selection")
     company_dict = pd.Series(sp500_df["Security"].values, index=sp500_df["Symbol"]).to_dict()
     full_list = {**index_dict, **company_dict}
-    
-    selected = st.selectbox("Select Stock", list(full_list.keys()),
-                           index=list(full_list.keys()).index("AAPL") if "AAPL" in full_list else 0,
-                           format_func=lambda s: f"{full_list.get(s,s)} ({s})")
-    
+
+    selected = st.selectbox(
+        "Select Stock",
+        list(full_list.keys()),
+        index=list(full_list.keys()).index("AAPL") if "AAPL" in full_list else 0,
+        format_func=lambda s: f"{full_list.get(s,s)} ({s})"
+    )
+
     st.markdown("---")
     st.session_state.selected_symbol = selected
-    
-    # Track stock selection in Google Analytics
-    if selected:
-        components.html(f"""
+
+    # Track stock selection in Google Analytics (top-level context; not iframe)
+    if selected and st.session_state.get("last_tracked_symbol") != selected:
+        st.session_state["last_tracked_symbol"] = selected
+        st.markdown(f"""
         <script>
-          if (typeof gtag !== 'undefined') {{
+          // Ensure gtag is available then send event
+          if (typeof window.gtag === 'function') {{
             gtag('event', 'stock_view', {{
               'stock_symbol': '{selected}',
               'mode': 'single_stock'
             }});
           }}
         </script>
-        """, height=0)
-    
+        """, unsafe_allow_html=True)
+
     if selected:
         ticker = yf.Ticker(selected)
         company = full_list.get(selected, selected)
         st.header(f"📈 {company}")
         st.caption(f"**{selected}**")
-        
+
         # FINANCIAL METRICS
         if selected not in index_dict:
             with st.expander("💰 Financial Metrics", expanded=True):
@@ -519,15 +514,15 @@ if app_mode == "Single Stock Analysis":
                     c4.metric("P/E", fmt_float(info.get("trailingPE", 0)))
                 except:
                     st.warning("⚠️ Data unavailable")
-        
+
         # VALUATION GAUGE AND ANALYST RATINGS
         if selected not in index_dict:
             col_left, col_right = st.columns(2)
-            
+
             with col_left:
                 try:
                     val_df = load_valuation_scores(val_path)
-                    
+
                     if val_df.empty:
                         st.subheader("📊 Valuation Gauge")
                         st.info("Valuation data not available")
@@ -536,17 +531,17 @@ if app_mode == "Single Stock Analysis":
                         st.error("❌ CSV missing 'Symbol' column")
                     else:
                         row = val_df[val_df["Symbol"].str.upper() == selected.upper()]
-                        
+
                         if not row.empty and "undervaluation_score" in row.columns:
                             score = float(row.iloc[0]["undervaluation_score"])
                             sector_name = row.iloc[0].get("Sector", row.iloc[0].get("GICS Sector", "Unknown"))
-                            
+
                             st.subheader("📊 Valuation Gauge")
-                            
+
                             badge = "success" if score <= 3 else "warning" if score <= 7 else "danger"
                             label = "Undervalued" if score <= 3 else "Fairly Valued" if score <= 7 else "Overvalued"
                             st.markdown(f'<span class="badge badge-{badge}">{label}</span>', unsafe_allow_html=True)
-                            
+
                             st.markdown(f"""
                             <div style="margin-top:1rem">
                                 <div style="display:flex;justify-content:space-between;font-size:0.75rem;color:#6B7280;margin-bottom:0.25rem">
@@ -568,8 +563,7 @@ if app_mode == "Single Stock Analysis":
                                 <div style='font-size:0.9rem;color:#6B7280;margin-top:0.5rem'>Sector: {sector_name}</div>
                             </div>
                             """, unsafe_allow_html=True)
-                            
-                            # Add explanation
+
                             with st.expander("ℹ️ How is this calculated?"):
                                 st.markdown("""
                                 **Undervaluation Score Methodology:**
@@ -593,39 +587,29 @@ if app_mode == "Single Stock Analysis":
                                 """)
                         else:
                             st.info(f"No valuation data for {selected}")
-                            
+
                 except Exception as e:
                     st.warning(f"⚠️ Valuation: {str(e)}")
-            
+
             with col_right:
                 st.subheader("⭐ Analyst Ratings")
                 try:
-                    recs = ticker.recommendations_summary
+                    recs = yf.Ticker(selected).recommendations_summary
                     if recs is not None and not recs.empty:
                         s = recs.iloc[-1]
-                        
-                        # Calculate weighted average rating (1=Strong Buy to 5=Strong Sell)
-                        rating_values = {
-                            "strongBuy": 1,
-                            "buy": 2,
-                            "hold": 3,
-                            "sell": 4,
-                            "strongSell": 5
-                        }
-                        
+
+                        rating_values = {"strongBuy": 1, "buy": 2, "hold": 3, "sell": 4, "strongSell": 5}
                         total_ratings = 0
                         weighted_sum = 0
-                        
                         for rating_key, rating_val in rating_values.items():
                             if rating_key in s.index and s[rating_key] > 0:
                                 count = int(s[rating_key])
                                 total_ratings += count
                                 weighted_sum += count * rating_val
-                        
+
                         if total_ratings > 0:
                             avg_rating = weighted_sum / total_ratings
-                            
-                            # Create barometer gauge
+
                             st.markdown(f"""
                             <div style="margin-top:1rem">
                                 <div style="display:flex;justify-content:space-between;font-size:0.75rem;color:#6B7280;margin-bottom:0.25rem">
@@ -637,32 +621,22 @@ if app_mode == "Single Stock Analysis":
                                     <div style="position:absolute;left:{(avg_rating-1)/4*100}%;top:-2px;width:20px;height:20px;background:#1F2937;border-radius:50%;border:3px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.3)"></div>
                                 </div>
                                 <div style="display:flex;justify-content:space-between;font-size:0.7rem;color:#9CA3AF;margin-top:0.5rem">
-                                    <span>1</span>
-                                    <span>2</span>
-                                    <span>3</span>
-                                    <span>4</span>
-                                    <span>5</span>
+                                    <span>1</span><span>2</span><span>3</span><span>4</span><span>5</span>
                                 </div>
                             </div>
                             """, unsafe_allow_html=True)
-                            
-                            # Show rating label
+
                             if avg_rating <= 1.5:
-                                label = "Strong Buy"
-                                color = "#10B981"
+                                label, color = "Strong Buy", "#10B981"
                             elif avg_rating <= 2.5:
-                                label = "Buy"
-                                color = "#34D399"
+                                label, color = "Buy", "#34D399"
                             elif avg_rating <= 3.5:
-                                label = "Hold"
-                                color = "#FCD34D"
+                                label, color = "Hold", "#FCD34D"
                             elif avg_rating <= 4.5:
-                                label = "Sell"
-                                color = "#FB923C"
+                                label, color = "Sell", "#FB923C"
                             else:
-                                label = "Strong Sell"
-                                color = "#EF4444"
-                            
+                                label, color = "Strong Sell", "#EF4444"
+
                             st.markdown(f"""
                             <div style='margin-top:1rem;text-align:center;padding:1rem;background:#F9FAFB;border-radius:8px'>
                                 <div style='font-size:1.75rem;font-weight:700;color:{color}'>{label}</div>
@@ -671,8 +645,7 @@ if app_mode == "Single Stock Analysis":
                                 </div>
                             </div>
                             """, unsafe_allow_html=True)
-                            
-                            # Show breakdown
+
                             with st.expander("📊 Rating Breakdown"):
                                 for rating_key in ["strongBuy", "buy", "hold", "sell", "strongSell"]:
                                     if rating_key in s.index and s[rating_key] > 0:
@@ -684,7 +657,7 @@ if app_mode == "Single Stock Analysis":
                         st.info("No ratings available")
                 except Exception as e:
                     st.warning(f"⚠️ No ratings: {str(e)}")
-        
+
         # NEWS SENTIMENT
         if selected not in index_dict:
             if news_api_key and NewsApiClient:
@@ -705,7 +678,7 @@ if app_mode == "Single Stock Analysis":
             else:
                 with st.expander("📰 News Sentiment", expanded=False):
                     st.info("News API not configured. Add NEWS_API_KEY to Streamlit secrets.")
-        
+
         # PRICE TARGETS
         if selected not in index_dict:
             with st.expander("🎯 Price Targets", expanded=True):
@@ -720,10 +693,10 @@ if app_mode == "Single Stock Analysis":
                 c4.metric("📈 Upside", fmt_pct(pt["upside"]))
                 if pt["n"]:
                     st.caption(f"**{pt['n']} analysts**")
-        
+
         # PRICE HISTORY
         with st.expander("📈 Price History", expanded=False):
-            hist = ticker.history(period="5y")
+            hist = yf.Ticker(selected).history(period="5y")
             if not hist.empty:
                 fig = go.Figure()
                 fig.add_trace(go.Scatter(x=hist.index, y=hist['Close'],
@@ -731,7 +704,7 @@ if app_mode == "Single Stock Analysis":
                 fig.update_layout(title=f"{selected} - 5Y", xaxis_title="Date",
                     yaxis_title="Price", height=400, margin=dict(l=40, r=40, t=40, b=40))
                 st.plotly_chart(fig, use_container_width=True)
-        
+
         # NEWS ARTICLES SECTION
         if selected not in index_dict and news_api_key and NewsApiClient:
             st.markdown("---")
@@ -748,7 +721,6 @@ if app_mode == "Single Stock Analysis":
                         with col2:
                             st.markdown(f"**[{a['title']}]({a['link']})**")
                             st.caption(f"📰 {a['publisher']}")
-                        
                         if i < min(9, len(articles) - 1):
                             st.divider()
                 else:
@@ -761,7 +733,7 @@ elif app_mode == "Multi-Stock Comparison":
     st.subheader("📊 Comparison")
     company_dict = pd.Series(sp500_df["Security"].values, index=sp500_df["Symbol"]).to_dict()
     full_list = {**index_dict, **company_dict}
-    
+
     c1, c2, c3 = st.columns([2, 1, 1])
     with c1:
         symbols = st.multiselect("Stocks", list(full_list.keys()), ["AAPL","MSFT","^GSPC"],
@@ -770,9 +742,9 @@ elif app_mode == "Multi-Stock Comparison":
         start = st.date_input("Start", date(2020,1,1))
     with c3:
         end = st.date_input("End", date.today())
-    
+
     st.markdown("---")
-    
+
     if symbols:
         df = pd.DataFrame()
         for s in symbols:
@@ -793,17 +765,16 @@ elif app_mode == "Multi-Stock Comparison":
 # TOP UNDERVALUED STOCKS
 elif app_mode == "Top Undervalued Stocks":
     st.header("🏆 Top Undervalued Stocks Right Now")
-    
     try:
         val_df = load_valuation_scores(val_path)
     except Exception as e:
         st.error(f"❌ {e}")
         st.stop()
-    
+
     if val_df.empty:
         st.warning("No valuation data available")
         st.stop()
-    
+
     sectors = ["All"] + sorted(val_df["Sector"].dropna().unique().tolist())
     c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
     with c1:
@@ -814,26 +785,26 @@ elif app_mode == "Top Undervalued Stocks":
         top_n = st.selectbox("Show Top", [10, 20, 50, 100])
     with c4:
         targets = st.checkbox("Show Price Targets", True)
-    
+
     c_reload, _ = st.columns([1, 5])
     with c_reload:
         if st.button("🔄 Reload"):
             load_valuation_scores.clear()
             st.rerun()
-    
+
     st.markdown("---")
-    
+
     df = val_df.copy()
     if sector != "All":
         df = df[df["Sector"] == sector]
     if "mkt_cap" in df.columns and mc_top > 0:
         df = df.sort_values("mkt_cap", ascending=False).head(mc_top)
-    
+
     # Always sort by undervaluation (lowest score = most undervalued)
     df = df.sort_values("undervaluation_score", ascending=True).reset_index(drop=True)
     df["Rank"] = range(1, len(df) + 1)
     out = df.head(top_n).copy()
-    
+
     if targets and not out.empty:
         with st.spinner("Loading targets..."):
             out["Last"] = None
@@ -848,27 +819,27 @@ elif app_mode == "Top Undervalued Stocks":
                 out.at[i, "PT High"] = pt["high"]
                 out.at[i, "PT Low"] = pt["low"]
                 out.at[i, "Upside"] = pt["upside"]
-    
+
     cols = ["Rank", "Symbol", "Security", "Sector", "undervaluation_score"]
     if targets:
         cols += ["Last", "PT Mean", "PT High", "PT Low", "Upside"]
     disp = out[[c for c in cols if c in out.columns]].copy()
-    
+
     for c in ["Last", "PT Mean", "PT High", "PT Low"]:
         if c in disp.columns:
             disp[c] = disp[c].apply(fmt_usd)
     if "Upside" in disp.columns:
         disp["Upside"] = disp["Upside"].apply(fmt_pct)
-    
+
     st.subheader(f"Top {top_n} Most Undervalued Stocks {f'in {sector}' if sector != 'All' else ''}")
     st.dataframe(disp, use_container_width=True, height=600, hide_index=True)
-    
+
     if not out.empty:
         fig = px.bar(out, x="Symbol", y="undervaluation_score", title="Undervaluation Scores (Lower = Better Value)",
             color="undervaluation_score", color_continuous_scale=["#10B981","#FCD34D","#EF4444"])
         fig.update_layout(showlegend=False, height=400)
         st.plotly_chart(fig, use_container_width=True)
-    
+
     st.download_button("⬇️ Download CSV", disp.to_csv(index=False),
         f"top_undervalued_{sector.replace(' ','_')}_top{top_n}.csv", "text/csv")
 
