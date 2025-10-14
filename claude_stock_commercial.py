@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
-"""S&P 500 Stock Analyzer - Complete Working Version with VADER Sentiment + GA top-level injection"""
+"""S&P 500 Stock Analyzer
+   - VADER Sentiment
+   - GA4 Measurement Protocol (server-side)
+   - PostHog client (bridged) + server fallback
+"""
 
 import io
+import json
+import uuid
 from datetime import date, timedelta
+
 import numpy as np
 import pandas as pd
 import requests
@@ -10,6 +17,7 @@ import yfinance as yf
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 
 try:
     from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
@@ -22,230 +30,210 @@ try:
 except:
     NewsApiClient = None
 
+# --------------------------------------------------------------------------------------
+# PAGE SETUP
+# --------------------------------------------------------------------------------------
 st.set_page_config(page_title="S&P 500 Analyzer", page_icon="📊", layout="wide")
 
-# -------------------------------------------
-# Google Analytics (GA4) - Inject into top page (NOT an iframe)
-# -------------------------------------------
-st.markdown("""
-<!-- Google tag (gtag.js) -->
-<script async src="https://www.googletagmanager.com/gtag/js?id=G-598BZYJEBM"></script>
-<script>
-  window.dataLayer = window.dataLayer || [];
-  function gtag(){ dataLayer.push(arguments); }
-  gtag('js', new Date());
-  // DebugView enabled; remove 'debug_mode' in production if desired
-  gtag('config', 'G-598BZYJEBM', { 'debug_mode': true });
-</script>
-""", unsafe_allow_html=True)
+# --------------------------------------------------------------------------------------
+# ANALYTICS CONFIG (edit these or set via st.secrets)
+# --------------------------------------------------------------------------------------
+# Toggle analytics modules
+ENABLE_GA_MP = True                 # GA4 Measurement Protocol (server-side)
+ENABLE_POSTHOG_CLIENT = True        # PostHog client (JS) via components bridge
+ENABLE_POSTHOG_SERVER = True        # PostHog server-side capture
 
-# Force light theme at root level
+# Prefer secrets if available
+GA_MEASUREMENT_ID = st.secrets.get("GA_MEASUREMENT_ID", "G-598BZYJEBM")  # <- your GA4 MEASUREMENT ID
+GA_API_SECRET     = st.secrets.get("GA_API_SECRET", "PUT_YOUR_GA_API_SECRET")  # <- create in GA4: Admin > Data Streams > Measurement Protocol API secret
+
+POSTHOG_KEY  = st.secrets.get("POSTHOG_KEY",  "phc_your_project_key_here")
+POSTHOG_HOST = st.secrets.get("POSTHOG_HOST", "https://app.posthog.com")   # or your self-hosted domain
+
+APP_URL = "https://intellinvest.streamlit.app/"
+
+# --------------------------------------------------------------------------------------
+# ANALYTICS HELPERS
+# --------------------------------------------------------------------------------------
+def _ensure_session_id():
+    if "session_id" not in st.session_state:
+        st.session_state["session_id"] = str(uuid.uuid4())
+    return st.session_state["session_id"]
+
+def ga_mp_send(event_name: str, params: dict):
+    """Send GA4 event via Measurement Protocol (server-side)."""
+    if not ENABLE_GA_MP:
+        return
+    try:
+        cid = _ensure_session_id()
+        url = f"https://www.google-analytics.com/mp/collect?measurement_id={GA_MEASUREMENT_ID}&api_secret={GA_API_SECRET}"
+        payload = {
+            "client_id": cid,
+            "events": [{"name": event_name, "params": params}],
+        }
+        requests.post(url, json=payload, timeout=4)
+    except Exception:
+        pass  # keep silent in prod
+
+def posthog_server_capture(event_name: str, properties: dict):
+    """Server-side event to PostHog."""
+    if not ENABLE_POSTHOG_SERVER:
+        return
+    try:
+        distinct_id = _ensure_session_id()
+        url = f"{POSTHOG_HOST}/capture/"
+        payload = {
+            "api_key": POSTHOG_KEY,
+            "event": event_name,
+            "properties": properties,
+            "distinct_id": distinct_id,
+        }
+        requests.post(url, data=json.dumps(payload),
+                      headers={"Content-Type": "application/json"},
+                      timeout=4)
+    except Exception:
+        pass
+
+def posthog_client_boot():
+    """Load PostHog client inside a tiny components iframe and bridge it to the app window."""
+    if not ENABLE_POSTHOG_CLIENT:
+        return
+    components.html(f"""
+<!doctype html><html><head><meta charset="utf-8"></head><body>
+<script>
+  (function() {{
+    try {{
+      if (!window.parent.posthog) {{
+        // Load lightweight PostHog loader in this iframe
+        var s = document.createElement('script'); s.async = true;
+        s.src = '{POSTHOG_HOST}/static/array.js';
+        s.onload = function() {{
+          try {{
+            window.posthog = window.posthog || [];
+            window.posthog.init('{POSTHOG_KEY}', {{ api_host: '{POSTHOG_HOST}' }});
+            window.parent.posthog = window.posthog; // bridge to parent
+            console.log('[PostHog] client initialized & bridged');
+          }} catch(e) {{ console.error('[PostHog] init error', e); }}
+        }};
+        document.head.appendChild(s);
+      }} else {{
+        console.log('[PostHog] already available on parent');
+      }}
+    }} catch (e) {{
+      console.warn('[PostHog] boot error', e);
+    }}
+  }})();
+</script>
+</body></html>
+""", height=0)
+
+# Initialize client analytics (safe on every rerun)
+posthog_client_boot()
+
+# Send a one-time "app_start" (per session) + GA page_view
+if st.session_state.get("_sent_app_start") is None:
+    st.session_state["_sent_app_start"] = True
+    # GA page_view (server)
+    ga_mp_send("page_view", {"page_title": "SP500 Analyzer", "page_location": APP_URL})
+    # PostHog (server)
+    posthog_server_capture("app_start", {"app": "sp500_analyzer"})
+    # PostHog (client) via bridged call
+    components.html("""
+<!doctype html><html><head><meta charset="utf-8"></head><body>
+<script>
+  (function fire(){
+    function send(){
+      try {
+        if (window.parent && window.parent.posthog) {
+          window.parent.posthog.capture('app_start', {app: 'sp500_analyzer'});
+          return true;
+        }
+      } catch(e){}
+      return false;
+    }
+    if(!send()){
+      let t=0; const it=setInterval(function(){
+        t++; if (send() || t>10) clearInterval(it);
+      }, 300);
+    }
+  })();
+</script>
+</body></html>
+""", height=0)
+
+# --------------------------------------------------------------------------------------
+# LIGHT THEME / STYLES (unchanged)
+# --------------------------------------------------------------------------------------
 st.markdown("""
 <script>
-// Force light theme by overriding Streamlit's theme detection
 window.parent.document.documentElement.setAttribute('data-theme', 'light');
 </script>
 """, unsafe_allow_html=True)
 
 st.markdown("""<style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
-
-/* NUCLEAR OPTION - Force everything to light mode */
 * { color-scheme: light !important; }
 html, body, #root, .stApp { color-scheme: light !important; background: #F9FAFB !important; }
-/* Force Streamlit container to light */
-[data-testid="stAppViewContainer"] { background: #F9FAFB !important; }
-[data-testid="stApp"] { background: #F9FAFB !important; }
-
+[data-testid="stAppViewContainer"], [data-testid="stApp"] { background: #F9FAFB !important; }
 html,body,.stApp{font-family:'Inter',sans-serif!important;background:#F9FAFB}
-
-/* Fix top header bar */
-header[data-testid="stHeader"]{background:#fff!important}
-.stApp > header{background:#fff!important}
-button[kind="header"]{color:#1F2937!important}
-div[data-testid="stToolbar"]{background:#fff!important}
-
-/* Fix hamburger menu and buttons in header */
-button[data-testid="baseButton-header"]{color:#1F2937!important}
+header[data-testid="stHeader"], .stApp > header{background:#fff!important}
+button[kind="header"], button[data-testid="baseButton-header"]{color:#1F2937!important}
 button[data-testid="baseButton-header"] svg{color:#1F2937!important;fill:#1F2937!important}
 section[data-testid="stSidebarNav"]{background:#fff!important}
-
-/* Fix mobile menu */
 div[data-testid="stSidebarNavItems"]{background:#fff!important}
-div[data-testid="stSidebarNavItems"] a{color:#1F2937!important}
-div[data-testid="stSidebarNavItems"] span{color:#1F2937!important}
-
+div[data-testid="stSidebarNavItems"] a, div[data-testid="stSidebarNavItems"] span{color:#1F2937!important}
 h1{font-size:2.5rem!important;font-weight:700!important;background:linear-gradient(135deg,#667eea,#764ba2);
 -webkit-background-clip:text;-webkit-text-fill-color:transparent}
 h2,h3{color:#1F2937!important}
-
-/* Fix selectbox styling - CRITICAL - More specific selectors */
 [data-baseweb="select"]{background:#fff!important}
 [data-baseweb="select"] > div{background:#fff!important;color:#1F2937!important;border:1px solid #E5E7EB!important}
-[data-baseweb="select"] [role="button"]{background:#fff!important;color:#1F2937!important}
-[data-baseweb="select"] input{background:#fff!important;color:#1F2937!important}
-[data-baseweb="select"] span{color:#1F2937!important}
-[data-baseweb="select"] svg{color:#1F2937!important;fill:#1F2937!important}
-div[data-baseweb="select"] > div{background:#fff!important;color:#1F2937!important;border:1px solid #E5E7EB!important}
-div[data-baseweb="select"] span{color:#1F2937!important}
-div[data-baseweb="select"] svg{color:#1F2937!important}
-/* Force all select boxes */
+[data-baseweb="select"] [role="button"], [data-baseweb="select"] input, [data-baseweb="select"] span,
+[data-baseweb="select"] svg{background:#fff!important;color:#1F2937!important;fill:#1F2937!important}
 .stSelectbox > div > div{background:#fff!important;color:#1F2937!important}
-.stSelectbox [data-baseweb="select"]{background:#fff!important}
 .stSelectbox label{color:#1F2937!important}
-
-/* Multi-select styling */
-.stMultiSelect > div > div{background:#fff!important;color:#1F2937!important}
-.stMultiSelect [data-baseweb="select"]{background:#fff!important}
-.stMultiSelect label{color:#1F2937!important}
-.stMultiSelect span{color:#1F2937!important}
+.stMultiSelect > div > div, .stMultiSelect [data-baseweb="select"]{background:#fff!important;color:#1F2937!important}
+.stMultiSelect label, .stMultiSelect span{color:#1F2937!important}
 .stMultiSelect [data-baseweb="tag"]{background:#E5E7EB!important;color:#1F2937!important}
-
-/* Number input styling */
-.stNumberInput > div > div{background:#fff!important;color:#1F2937!important;border:1px solid #E5E7EB!important}
-.stNumberInput input{background:#fff!important;color:#1F2937!important}
-.stNumberInput label{color:#1F2937!important}
-.stNumberInput button{background:#fff!important;color:#1F2937!important;border:1px solid #E5E7EB!important}
-.stNumberInput [data-baseweb="input"]{background:#fff!important}
-.stNumberInput [data-baseweb="input"] > div{background:#fff!important}
-.stNumberInput [data-baseweb="input"] input{background:#fff!important;color:#1F2937!important}
-
-/* Date input styling */
-.stDateInput > div > div{background:#fff!important;color:#1F2937!important;border:1px solid #E5E7EB!important}
-.stDateInput input{background:#fff!important;color:#1F2937!important}
-.stDateInput label{color:#1F2937!important}
-
-/* Text input styling */
-.stTextInput > div > div{background:#fff!important;color:#1F2937!important;border:1px solid #E5E7EB!important}
-.stTextInput input{background:#fff!important;color:#1F2937!important}
-.stTextInput label{color:#1F2937!important}
-
-/* Checkbox styling */
-.stCheckbox{color:#1F2937!important}
-.stCheckbox > label{color:#1F2937!important}
-.stCheckbox span{color:#1F2937!important}
-
-/* Radio button styling */
-.stRadio > label{color:#1F2937!important}
-.stRadio [role="radiogroup"]{color:#1F2937!important}
-.stRadio [role="radiogroup"] label{color:#1F2937!important}
-.stRadio [role="radiogroup"] span{color:#1F2937!important}
-
-/* Slider styling */
-.stSlider > label{color:#1F2937!important}
-.stSlider [data-baseweb="slider"]{background:#fff!important}
-
-/* Dropdown menu - Multiple selectors to override everything */
-[data-baseweb="popover"]{background:#fff!important}
-[data-baseweb="popover"] > div{background:#fff!important}
-div[data-baseweb="popover"]{background:#fff!important}
-ul[role="listbox"]{background:#fff!important}
-ul[role="listbox"] li{background:#fff!important;color:#1F2937!important}
-ul[role="listbox"] li:hover{background:#F3F4F6!important;color:#1F2937!important}
-ul[role="listbox"] span{color:#1F2937!important}
-ul[role="listbox"] div{color:#1F2937!important}
-/* Target the menu container */
-[role="listbox"]{background:#fff!important}
-[role="listbox"] *{color:#1F2937!important}
-/* Target layers */
-div[class*="layer"]{background:transparent!important}
-div[class*="Layer"]{background:transparent!important}
-/* Selectbox menu */
-.stSelectbox [role="listbox"]{background:#fff!important}
-.stSelectbox ul{background:#fff!important}
-.stSelectbox li{background:#fff!important;color:#1F2937!important}
-/* Extra layer targeting */
-div[data-baseweb="menu"]{background:#fff!important}
-div[data-baseweb="menu"] > div{background:#fff!important}
-div[data-baseweb="menu"] ul{background:#fff!important}
-div[data-baseweb="menu"] li{background:#fff!important;color:#1F2937!important}
-
-/* Calendar/date picker dropdown */
-[data-baseweb="calendar"]{background:#fff!important;color:#1F2937!important}
-[data-baseweb="calendar"] *{color:#1F2937!important}
-
-/* Fix the Select Stock label */
-label{color:#1F2937!important}
-.stSelectbox label{color:#1F2937!important}
-.stSelectbox > label{color:#1F2937!important}
-
-/* Fix metrics */
+.stNumberInput > div > div, .stNumberInput input{background:#fff!important;color:#1F2937!important;border:1px solid #E5E7EB!important}
+.stDateInput > div > div, .stDateInput input{background:#fff!important;color:#1F2937!important;border:1px solid #E5E7EB!important}
+.stTextInput > div > div, .stTextInput input{background:#fff!important;color:#1F2937!important;border:1px solid #E5E7EB!important}
+.stCheckbox, .stCheckbox > label, .stCheckbox span{color:#1F2937!important}
+.stRadio > label, .stRadio [role="radiogroup"] label, .stRadio [role="radiogroup"] span{color:#1F2937!important}
 [data-testid="stMetric"]{background:#fff;padding:1rem;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.1);border:1px solid #E5E7EB}
 [data-testid="stMetricValue"]{font-size:1.75rem!important;font-weight:700!important;color:#1F2937!important}
 [data-testid="stMetricLabel"]{color:#6B7280!important}
-
-/* Fix expander styling */
 div[data-testid="stExpander"]{background:#fff!important;border-radius:12px;border:1px solid #E5E7EB;margin-bottom:1rem}
 div[data-testid="stExpander"] summary{background:#fff!important;color:#1F2937!important;padding:1rem!important}
 div[data-testid="stExpander"] summary:hover{background:#F3F4F6!important}
 div[data-testid="stExpander"] div[data-testid="stExpanderDetails"]{background:#fff!important;padding:1rem!important}
-div[data-testid="stExpander"] p, div[data-testid="stExpander"] li, div[data-testid="stExpander"] span{color:#1F2937!important}
-
-/* Buttons */
 .stButton>button{background:linear-gradient(135deg,#667eea,#764ba2)!important;color:#fff!important;
 border:none!important;border-radius:8px!important;padding:.5rem 1.5rem!important;font-weight:600!important}
-
-/* Badges */
 .badge{display:inline-block;padding:.25rem .75rem;border-radius:9999px;font-size:.75rem;font-weight:600;text-transform:uppercase}
 .badge-success{background:#D1FAE5;color:#065F46}
 .badge-warning{background:#FEF3C7;color:#92400E}
 .badge-danger{background:#FEE2E2;color:#991B1B}
 .compact-metric [data-testid="stMetricValue"]{font-size:1.2rem!important}
-
-/* Fix all text visibility */
 p, span, div, label{color:#1F2937!important}
-.stMarkdown{color:#1F2937!important}
 [data-testid="stCaption"]{color:#6B7280!important}
-
-/* Sidebar fixes - CRITICAL FOR MOBILE */
 section[data-testid="stSidebar"]{background:#fff!important}
 section[data-testid="stSidebar"] *{color:#1F2937!important}
-section[data-testid="stSidebar"] h2{color:#1F2937!important}
-section[data-testid="stSidebar"] label{color:#1F2937!important}
-section[data-testid="stSidebar"] p{color:#1F2937!important}
+section[data-testid="stSidebar"] h2, section[data-testid="stSidebar"] label, section[data-testid="stSidebar"] p,
 section[data-testid="stSidebar"] span{color:#1F2937!important}
 section[data-testid="stSidebar"] div[data-testid="stMarkdownContainer"]{color:#1F2937!important}
-section[data-testid="stSidebar"] div[data-testid="stMarkdownContainer"] p{color:#1F2937!important}
-/* Fix radio buttons in sidebar */
-section[data-testid="stSidebar"] div[role="radiogroup"] label{color:#1F2937!important}
-section[data-testid="stSidebar"] div[role="radiogroup"] span{color:#1F2937!important}
 section[data-testid="stSidebar"] label[data-baseweb="radio"]{color:#1F2937!important}
 section[data-testid="stSidebar"] label[data-baseweb="radio"] > div{color:#1F2937!important}
-
-/* Input fields */
 input, textarea{background:#fff!important;color:#1F2937!important;border:1px solid #E5E7EB!important}
-
-/* Number input */
 div[data-baseweb="input"] > div{background:#fff!important}
 div[data-baseweb="input"] input{color:#1F2937!important}
-
-/* Checkbox */
-label[data-baseweb="checkbox"] span{color:#1F2937!important}
-
-/* Mobile responsive */
 @media (max-width: 768px) {
   h1{font-size:1.75rem!important}
   h2{font-size:1.5rem!important}
   h3{font-size:1.25rem!important}
   [data-testid="stMetric"]{padding:0.75rem!important}
   [data-testid="stMetricValue"]{font-size:1.5rem!important}
-  /* Extra mobile fixes for selectbox */
-  [data-baseweb="select"] > div{ background:#fff!important; color:#1F2937!important; }
-  /* Force all dropdown menus white on mobile */
-  [role="listbox"]{background:#fff!important}
-  [role="listbox"] li{background:#fff!important;color:#1F2937!important}
-  [role="listbox"] *{color:#1F2937!important}
-  ul{background:#fff!important}
-  li{background:#fff!important;color:#1F2937!important}
+  [role="listbox"], ul, li{background:#fff!important;color:#1F2937!important}
 }
-
-/* NUCLEAR OPTION - Override all Streamlit layers and portals */
-body > div[class*="layer"],
-body > div[class*="Layer"],
-#root > div[class*="layer"],
-[data-baseweb="layer"]{
-  background:transparent!important;
-}
+body > div[class*="layer"], #root > div[class*="layer"], [data-baseweb="layer"]{ background:transparent!important; }
 [data-baseweb="menu"]{background:#fff!important}
 [data-baseweb="menu"] ul{background:#fff!important}
 [data-baseweb="menu"] li{background:#fff!important;color:#1F2937!important}
@@ -253,11 +241,14 @@ body > div[class*="Layer"],
 
 DEFAULT_VAL_PATH = "val_output/undervaluation_scored.csv"
 
+# --------------------------------------------------------------------------------------
+# DATA HELPERS (unchanged)
+# --------------------------------------------------------------------------------------
 @st.cache_data(ttl=3600)
 def get_sp500_data():
     try:
         r = requests.get("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies",
-                        headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
+                         headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
         df = pd.read_html(r.text)[0]
         df["Symbol"] = df["Symbol"].str.replace(".", "-", regex=False)
         return df[["Symbol", "Security", "GICS Sector"]]
@@ -303,7 +294,6 @@ def load_valuation_scores(csv_path):
 
 @st.cache_resource
 def load_sentiment_model():
-    """Load VADER sentiment analyzer"""
     if VADER_AVAILABLE:
         return SentimentIntensityAnalyzer()
     return None
@@ -316,10 +306,9 @@ def analyze_news_sentiment(api_key, company_name, min_articles=5):
         newsapi = NewsApiClient(api_key=api_key)
         from_date = (date.today() - timedelta(days=28)).strftime("%Y-%m-%d")
         all_articles = newsapi.get_everything(
-            q=f'"{company_name}" AND (earnings OR forecast OR guidance OR outlook OR analyst OR target OR upgrade OR downgrade)', 
+            q=f'"{company_name}" AND (earnings OR forecast OR guidance OR outlook OR analyst OR target OR upgrade OR downgrade)',
             language="en", from_param=from_date, sort_by="relevancy", page_size=50)
 
-        # Check for rate limit error
         if isinstance(all_articles, dict) and all_articles.get("status") == "error":
             if "rate limit" in str(all_articles.get("message", "")).lower():
                 return "Daily news limit reached. Try again tomorrow.", "N/A", 0, []
@@ -327,29 +316,27 @@ def analyze_news_sentiment(api_key, company_name, min_articles=5):
         if all_articles["totalResults"] == 0:
             return "No articles found.", "N/A", 0, []
 
-        exclude_keywords = ['up', 'down', 'gains', 'falls', 'rises', 'drops', 'climbs', 'slides', 
-                          'jumps', 'dips', 'rallies', 'plunges', 'surges', 'tumbles', 'soars',
-                          'today', 'yesterday', 'trading', 'premarket', 'afterhours']
+        exclude_keywords = ['up', 'down', 'gains', 'falls', 'rises', 'drops', 'climbs', 'slides',
+                            'jumps', 'dips', 'rallies', 'plunges', 'surges', 'tumbles', 'soars',
+                            'today', 'yesterday', 'trading', 'premarket', 'afterhours']
         forward_keywords = ['forecast', 'outlook', 'guidance', 'expects', 'projected', 'target',
-                          'estimate', 'consensus', 'upgrade', 'downgrade', 'rating', 'analyst',
-                          'quarter', 'earnings', 'revenue', 'fy2024', 'fy2025', 'next year',
-                          'growth', 'expansion', 'strategy', 'future', 'plans']
+                            'estimate', 'consensus', 'upgrade', 'downgrade', 'rating', 'analyst',
+                            'quarter', 'earnings', 'revenue', 'fy2024', 'fy2025', 'next year',
+                            'growth', 'expansion', 'strategy', 'future', 'plans']
 
         articles = []
         for a in all_articles["articles"][:40]:
             title_lower = a["title"].lower()
             desc_lower = (a.get("description") or "").lower()
             combined = title_lower + " " + desc_lower
-
             if any(kw in combined for kw in exclude_keywords):
                 continue
-
             if any(kw in combined for kw in forward_keywords):
                 articles.append(a)
 
         article_list = [{"title": a["title"], "link": a["url"],
-                        "publisher": a["source"]["name"], "image_url": a.get("urlToImage")}
-                       for a in articles]
+                         "publisher": a["source"]["name"], "image_url": a.get("urlToImage")}
+                        for a in articles]
 
         if len(articles) < min_articles:
             return f"Only {len(articles)} forward-looking articles", "N/A", len(articles), article_list
@@ -358,20 +345,15 @@ def analyze_news_sentiment(api_key, company_name, min_articles=5):
         if not sentiment_model:
             return "Sentiment model unavailable.", "N/A", len(articles), article_list
 
-        # Use VADER for sentiment
         pos, neg, neu = 0, 0, 0
         for a in articles[:20]:
             try:
                 text = a["title"] + " " + (a.get("description") or "")
                 scores = sentiment_model.polarity_scores(text)
                 compound = scores['compound']
-
-                if compound >= 0.05:
-                    pos += 1
-                elif compound <= -0.05:
-                    neg += 1
-                else:
-                    neu += 1
+                if compound >= 0.05: pos += 1
+                elif compound <= -0.05: neg += 1
+                else: neu += 1
             except:
                 pass
 
@@ -397,24 +379,21 @@ def get_price_targets_cached(symbol):
         high = pt.get("high") or pt.get("targetHighPrice")
         n = pt.get("numberOfAnalysts") or pt.get("numAnalysts")
         upside = (mean/last-1) if (mean and last) else None
-        return {"last": last, "mean": mean, "high": high, "low": low, "n": int(n) if n else None, "upside": upside}
+        return {"last": last, "mean": mean, "high": high, "low": low,
+                "n": int(n) if n else None, "upside": upside}
     except:
         return {"last": None, "mean": None, "high": None, "low": None, "n": None, "upside": None}
 
-def fmt_pct(x):
-    return f"{float(x):.2%}" if x is not None and not pd.isna(x) else "N/A"
+def fmt_pct(x):   return f"{float(x):.2%}"  if x is not None and not pd.isna(x) else "N/A"
+def fmt_usd(x):   return f"${float(x):,.2f}" if x is not None and not pd.isna(x) else "N/A"
+def fmt_float(x): return f"{float(x):.2f}"   if x is not None and not pd.isna(x) else "N/A"
 
-def fmt_usd(x):
-    return f"${float(x):,.2f}" if x is not None and not pd.isna(x) else "N/A"
-
-def fmt_float(x):
-    return f"{float(x):.2f}" if x is not None and not pd.isna(x) else "N/A"
-
-# MAIN APP
+# --------------------------------------------------------------------------------------
+# APP UI
+# --------------------------------------------------------------------------------------
 st.title("🔍 Key Stock Investment Metrics")
 st.caption("AI-Powered Valuation, Price Targets & Sentiment Analysis")
 
-# Legal disclaimer and credits
 st.markdown("""
 <div style='background:#FEF3C7;border-left:4px solid #F59E0B;padding:1rem;border-radius:8px;margin-bottom:1.5rem'>
     <strong>⚠️ For Personal Use Only</strong><br>
@@ -428,16 +407,10 @@ st.markdown("""
 <summary style='cursor:pointer;color:#6B7280;font-size:0.85rem'>📚 Credits & Data Sources</summary>
 <div style='padding:0.5rem;font-size:0.85rem;color:#6B7280'>
     <strong>Libraries & APIs:</strong><br>
-    • <a href="https://streamlit.io" target="_blank">Streamlit</a> - Interactive web framework<br>
-    • <a href="https://github.com/ranaroussi/yfinance" target="_blank">yfinance</a> - Yahoo Finance data<br>
-    • <a href="https://plotly.com" target="_blank">Plotly</a> - Interactive visualizations<br>
-    • <a href="https://github.com/cjhutto/vaderSentiment" target="_blank">VADER Sentiment</a> - News sentiment analysis<br>
-    • <a href="https://newsapi.org" target="_blank">NewsAPI</a> - News articles<br>
-    • <strong>pandas, numpy</strong> - Data processing<br><br>
+    • Streamlit • yfinance • Plotly • VADER • NewsAPI • pandas, numpy<br><br>
     <strong>Data Sources:</strong><br>
-    • Stock prices: Yahoo Finance<br>
-    • Analyst ratings: Yahoo Finance<br>
-    • News articles: NewsAPI.org<br>
+    • Stock prices & analyst ratings: Yahoo Finance<br>
+    • News: NewsAPI.org<br>
     • S&P 500 list: Wikipedia
 </div>
 </details>
@@ -453,15 +426,12 @@ except:
     news_api_key = None
 
 val_path = DEFAULT_VAL_PATH
-
 sp500_df = get_sp500_data()
 index_dict = {"^GSPC": "S&P 500", "^NDX": "Nasdaq-100"}
 
-# Initialize GA de-dupe key
-if "last_tracked_symbol" not in st.session_state:
-    st.session_state["last_tracked_symbol"] = None
-
+# --------------------------------------------------------------------------------------
 # SINGLE STOCK ANALYSIS
+# --------------------------------------------------------------------------------------
 if app_mode == "Single Stock Analysis":
     st.subheader("🔍 Stock Selection")
     company_dict = pd.Series(sp500_df["Security"].values, index=sp500_df["Symbol"]).to_dict()
@@ -477,20 +447,44 @@ if app_mode == "Single Stock Analysis":
     st.markdown("---")
     st.session_state.selected_symbol = selected
 
-    # Track stock selection in Google Analytics (top-level context; not iframe)
-    if selected and st.session_state.get("last_tracked_symbol") != selected:
+    # Deduped analytics on selection change
+    if "last_tracked_symbol" not in st.session_state:
+        st.session_state["last_tracked_symbol"] = None
+
+    if selected and st.session_state["last_tracked_symbol"] != selected:
         st.session_state["last_tracked_symbol"] = selected
-        st.markdown(f"""
-        <script>
-          // Ensure gtag is available then send event
-          if (typeof window.gtag === 'function') {{
-            gtag('event', 'stock_view', {{
-              'stock_symbol': '{selected}',
-              'mode': 'single_stock'
-            }});
-          }}
-        </script>
-        """, unsafe_allow_html=True)
+
+        # GA4 (server)
+        ga_mp_send("stock_view", {"stock_symbol": selected, "mode": "single_stock"})
+
+        # PostHog (server)
+        posthog_server_capture("stock_view", {"stock_symbol": selected, "mode": "single_stock"})
+
+        # PostHog (client) via bridged call
+        components.html(f"""
+<!doctype html><html><head><meta charset="utf-8"></head><body>
+<script>
+  (function send(){{
+    function go(){{
+      try {{
+        if (window.parent && window.parent.posthog) {{
+          window.parent.posthog.capture('stock_view', {{
+            stock_symbol: '{selected}', mode: 'single_stock'
+          }});
+          return true;
+        }}
+      }} catch(e){{}}
+      return false;
+    }}
+    if (!go()) {{
+      let tries=0; const t=setInterval(function(){{
+        tries++; if (go()||tries>10) clearInterval(t);
+      }}, 300);
+    }}
+  }})();
+</script>
+</body></html>
+""", height=0)
 
     if selected:
         ticker = yf.Ticker(selected)
@@ -515,142 +509,99 @@ if app_mode == "Single Stock Analysis":
                 except:
                     st.warning("⚠️ Data unavailable")
 
-        # VALUATION GAUGE AND ANALYST RATINGS
+        # VALUATION & ANALYST RATINGS
         if selected not in index_dict:
             col_left, col_right = st.columns(2)
 
             with col_left:
                 try:
                     val_df = load_valuation_scores(val_path)
-
-                    if val_df.empty:
-                        st.subheader("📊 Valuation Gauge")
+                    st.subheader("📊 Valuation Gauge")
+                    if val_df.empty or "Symbol" not in val_df.columns:
                         st.info("Valuation data not available")
-                    elif "Symbol" not in val_df.columns:
-                        st.subheader("📊 Valuation Gauge")
-                        st.error("❌ CSV missing 'Symbol' column")
                     else:
                         row = val_df[val_df["Symbol"].str.upper() == selected.upper()]
-
                         if not row.empty and "undervaluation_score" in row.columns:
                             score = float(row.iloc[0]["undervaluation_score"])
                             sector_name = row.iloc[0].get("Sector", row.iloc[0].get("GICS Sector", "Unknown"))
-
-                            st.subheader("📊 Valuation Gauge")
-
                             badge = "success" if score <= 3 else "warning" if score <= 7 else "danger"
                             label = "Undervalued" if score <= 3 else "Fairly Valued" if score <= 7 else "Overvalued"
                             st.markdown(f'<span class="badge badge-{badge}">{label}</span>', unsafe_allow_html=True)
-
                             st.markdown(f"""
                             <div style="margin-top:1rem">
-                                <div style="display:flex;justify-content:space-between;font-size:0.75rem;color:#6B7280;margin-bottom:0.25rem">
-                                    <span>Undervalued</span>
-                                    <span>Fairly Valued</span>
-                                    <span>Overvalued</span>
-                                </div>
-                                <div style="width:100%;height:8px;background:linear-gradient(to right, #10B981, #FCD34D, #EF4444);border-radius:4px;position:relative">
-                                    <div style="position:absolute;left:{(score-1)/9*100}%;top:-4px;width:16px;height:16px;background:#1F2937;border-radius:50%;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.2)"></div>
-                                </div>
-                                <div style="display:flex;justify-content:space-between;font-size:0.7rem;color:#9CA3AF;margin-top:0.5rem">
-                                    <span>1</span>
-                                    <span>5</span>
-                                    <span>10</span>
-                                </div>
+                              <div style="display:flex;justify-content:space-between;font-size:0.75rem;color:#6B7280;margin-bottom:0.25rem">
+                                <span>Undervalued</span><span>Fairly Valued</span><span>Overvalued</span>
+                              </div>
+                              <div style="width:100%;height:8px;background:linear-gradient(to right, #10B981, #FCD34D, #EF4444);border-radius:4px;position:relative">
+                                <div style="position:absolute;left:{(score-1)/9*100}%;top:-4px;width:16px;height:16px;background:#1F2937;border-radius:50%;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.2)"></div>
+                              </div>
+                              <div style="display:flex;justify-content:space-between;font-size:0.7rem;color:#9CA3AF;margin-top:0.5rem">
+                                <span>1</span><span>5</span><span>10</span>
+                              </div>
                             </div>
                             <div style='margin-top:1rem;text-align:center;padding:1rem;background:#F9FAFB;border-radius:8px'>
-                                <div style='font-size:2rem;font-weight:700;color:#1F2937'>{score:.1f}<span style='font-size:1.2rem;color:#6B7280'>/10</span></div>
-                                <div style='font-size:0.9rem;color:#6B7280;margin-top:0.5rem'>Sector: {sector_name}</div>
+                              <div style='font-size:2rem;font-weight:700;color:#1F2937'>{score:.1f}<span style='font-size:1.2rem;color:#6B7280'>/10</span></div>
+                              <div style='font-size:0.9rem;color:#6B7280;margin-top:0.5rem'>Sector: {sector_name}</div>
                             </div>
                             """, unsafe_allow_html=True)
-
                             with st.expander("ℹ️ How is this calculated?"):
                                 st.markdown("""
-                                **Undervaluation Score Methodology:**
-                                
-                                The score (1-10) is calculated based on multiple valuation metrics:
-                                
-                                - **Price-to-Earnings (P/E) Ratio** - vs sector average
-                                - **Price-to-Book (P/B) Ratio** - vs historical values
-                                - **Price-to-Sales (P/S) Ratio** - vs competitors
-                                - **PEG Ratio** - P/E relative to growth rate
-                                - **Enterprise Value multiples** - EV/EBITDA, EV/Sales
-                                - **Dividend Yield** - compared to peers
-                                
-                                **Score Interpretation:**
-                                - **1-3**: Potentially undervalued (green zone)
-                                - **4-7**: Fairly valued (yellow zone)
-                                - **8-10**: Potentially overvalued (red zone)
-                                
-                                *Lower scores suggest better value, but always consider company fundamentals, 
-                                growth prospects, and market conditions. This is not financial advice.*
-                                """)
+**Undervaluation Score (1–10)** combines:
+- P/E vs sector, P/B vs history, P/S vs peers
+- PEG, EV/EBITDA, EV/Sales
+- Dividend yield vs peers
+
+1–3: Undervalued · 4–7: Fair · 8–10: Overvalued
+*Not financial advice.*
+""")
                         else:
                             st.info(f"No valuation data for {selected}")
-
                 except Exception as e:
                     st.warning(f"⚠️ Valuation: {str(e)}")
 
             with col_right:
                 st.subheader("⭐ Analyst Ratings")
                 try:
-                    recs = yf.Ticker(selected).recommendations_summary
+                    recs = ticker.recommendations_summary
                     if recs is not None and not recs.empty:
                         s = recs.iloc[-1]
-
                         rating_values = {"strongBuy": 1, "buy": 2, "hold": 3, "sell": 4, "strongSell": 5}
-                        total_ratings = 0
-                        weighted_sum = 0
-                        for rating_key, rating_val in rating_values.items():
-                            if rating_key in s.index and s[rating_key] > 0:
-                                count = int(s[rating_key])
-                                total_ratings += count
-                                weighted_sum += count * rating_val
-
+                        total_ratings, weighted_sum = 0, 0
+                        for key, val in rating_values.items():
+                            if key in s.index and s[key] > 0:
+                                cnt = int(s[key]); total_ratings += cnt; weighted_sum += cnt * val
                         if total_ratings > 0:
-                            avg_rating = weighted_sum / total_ratings
-
+                            avg = weighted_sum / total_ratings
                             st.markdown(f"""
                             <div style="margin-top:1rem">
-                                <div style="display:flex;justify-content:space-between;font-size:0.75rem;color:#6B7280;margin-bottom:0.25rem">
-                                    <span>Strong Buy</span>
-                                    <span>Hold</span>
-                                    <span>Strong Sell</span>
-                                </div>
-                                <div style="width:100%;height:12px;background:linear-gradient(to right, #10B981, #34D399, #FCD34D, #FB923C, #EF4444);border-radius:6px;position:relative">
-                                    <div style="position:absolute;left:{(avg_rating-1)/4*100}%;top:-2px;width:20px;height:20px;background:#1F2937;border-radius:50%;border:3px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.3)"></div>
-                                </div>
-                                <div style="display:flex;justify-content:space-between;font-size:0.7rem;color:#9CA3AF;margin-top:0.5rem">
-                                    <span>1</span><span>2</span><span>3</span><span>4</span><span>5</span>
-                                </div>
+                              <div style="display:flex;justify-content:space-between;font-size:0.75rem;color:#6B7280;margin-bottom:0.25rem">
+                                <span>Strong Buy</span><span>Hold</span><span>Strong Sell</span>
+                              </div>
+                              <div style="width:100%;height:12px;background:linear-gradient(to right,#10B981,#34D399,#FCD34D,#FB923C,#EF4444);border-radius:6px;position:relative">
+                                <div style="position:absolute;left:{(avg-1)/4*100}%;top:-2px;width:20px;height:20px;background:#1F2937;border-radius:50%;border:3px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.3)"></div>
+                              </div>
+                              <div style="display:flex;justify-content:space-between;font-size:0.7rem;color:#9CA3AF;margin-top:0.5rem">
+                                <span>1</span><span>2</span><span>3</span><span>4</span><span>5</span>
+                              </div>
                             </div>
                             """, unsafe_allow_html=True)
-
-                            if avg_rating <= 1.5:
-                                label, color = "Strong Buy", "#10B981"
-                            elif avg_rating <= 2.5:
-                                label, color = "Buy", "#34D399"
-                            elif avg_rating <= 3.5:
-                                label, color = "Hold", "#FCD34D"
-                            elif avg_rating <= 4.5:
-                                label, color = "Sell", "#FB923C"
-                            else:
-                                label, color = "Strong Sell", "#EF4444"
-
+                            if   avg <= 1.5: label, color = "Strong Buy", "#10B981"
+                            elif avg <= 2.5: label, color = "Buy", "#34D399"
+                            elif avg <= 3.5: label, color = "Hold", "#FCD34D"
+                            elif avg <= 4.5: label, color = "Sell", "#FB923C"
+                            else:           label, color = "Strong Sell", "#EF4444"
                             st.markdown(f"""
                             <div style='margin-top:1rem;text-align:center;padding:1rem;background:#F9FAFB;border-radius:8px'>
-                                <div style='font-size:1.75rem;font-weight:700;color:{color}'>{label}</div>
-                                <div style='font-size:0.9rem;color:#6B7280;margin-top:0.5rem'>
-                                    Avg Rating: {avg_rating:.2f} | {total_ratings} analysts
-                                </div>
+                              <div style='font-size:1.75rem;font-weight:700;color:{color}'>{label}</div>
+                              <div style='font-size:0.9rem;color:#6B7280;margin-top:0.5rem'>
+                                Avg Rating: {avg:.2f} | {total_ratings} analysts
+                              </div>
                             </div>
                             """, unsafe_allow_html=True)
-
                             with st.expander("📊 Rating Breakdown"):
-                                for rating_key in ["strongBuy", "buy", "hold", "sell", "strongSell"]:
-                                    if rating_key in s.index and s[rating_key] > 0:
-                                        label_name = rating_key.replace("strong", "Strong ")
-                                        st.write(f"**{label_name}:** {int(s[rating_key])}")
+                                for key in ["strongBuy","buy","hold","sell","strongSell"]:
+                                    if key in s.index and s[key] > 0:
+                                        st.write(f"**{key.replace('strong','Strong ')}:** {int(s[key])}")
                         else:
                             st.info("No rating data")
                     else:
@@ -665,10 +616,7 @@ if app_mode == "Single Stock Analysis":
                     st.caption("Earnings, forecasts, guidance, analyst ratings - excludes daily price moves")
                     bull, bear, n, _ = analyze_news_sentiment(news_api_key, company, 5)
                     if isinstance(bull, str):
-                        if "limit reached" in bull.lower():
-                            st.warning(f"ℹ️ {bull}")
-                        else:
-                            st.info(f"ℹ️ {bull}")
+                        st.info(f"ℹ️ {bull}")
                     else:
                         c1, c2, c3 = st.columns(3)
                         c1.metric("🟢 Bullish", f"{bull:.1f}%")
@@ -705,7 +653,7 @@ if app_mode == "Single Stock Analysis":
                     yaxis_title="Price", height=400, margin=dict(l=40, r=40, t=40, b=40))
                 st.plotly_chart(fig, use_container_width=True)
 
-        # NEWS ARTICLES SECTION
+        # NEWS ARTICLES
         if selected not in index_dict and news_api_key and NewsApiClient:
             st.markdown("---")
             st.subheader("📰 Latest News & Analysis")
@@ -728,7 +676,9 @@ if app_mode == "Single Stock Analysis":
             except Exception as e:
                 st.warning(f"Could not load news: {str(e)}")
 
+# --------------------------------------------------------------------------------------
 # MULTI-STOCK COMPARISON
+# --------------------------------------------------------------------------------------
 elif app_mode == "Multi-Stock Comparison":
     st.subheader("📊 Comparison")
     company_dict = pd.Series(sp500_df["Security"].values, index=sp500_df["Symbol"]).to_dict()
@@ -762,7 +712,9 @@ elif app_mode == "Multi-Stock Comparison":
                 yaxis_title="Return (%)", height=600)
             st.plotly_chart(fig, use_container_width=True)
 
+# --------------------------------------------------------------------------------------
 # TOP UNDERVALUED STOCKS
+# --------------------------------------------------------------------------------------
 elif app_mode == "Top Undervalued Stocks":
     st.header("🏆 Top Undervalued Stocks Right Now")
     try:
@@ -800,18 +752,13 @@ elif app_mode == "Top Undervalued Stocks":
     if "mkt_cap" in df.columns and mc_top > 0:
         df = df.sort_values("mkt_cap", ascending=False).head(mc_top)
 
-    # Always sort by undervaluation (lowest score = most undervalued)
     df = df.sort_values("undervaluation_score", ascending=True).reset_index(drop=True)
     df["Rank"] = range(1, len(df) + 1)
     out = df.head(top_n).copy()
 
     if targets and not out.empty:
         with st.spinner("Loading targets..."):
-            out["Last"] = None
-            out["PT Mean"] = None
-            out["PT High"] = None
-            out["PT Low"] = None
-            out["Upside"] = None
+            out["Last"] = None; out["PT Mean"] = None; out["PT High"] = None; out["PT Low"] = None; out["Upside"] = None
             for i, row in out.iterrows():
                 pt = get_price_targets_cached(row["Symbol"])
                 out.at[i, "Last"] = pt["last"]
@@ -826,10 +773,8 @@ elif app_mode == "Top Undervalued Stocks":
     disp = out[[c for c in cols if c in out.columns]].copy()
 
     for c in ["Last", "PT Mean", "PT High", "PT Low"]:
-        if c in disp.columns:
-            disp[c] = disp[c].apply(fmt_usd)
-    if "Upside" in disp.columns:
-        disp["Upside"] = disp["Upside"].apply(fmt_pct)
+        if c in disp.columns: disp[c] = disp[c].apply(fmt_usd)
+    if "Upside" in disp.columns: disp["Upside"] = disp["Upside"].apply(fmt_pct)
 
     st.subheader(f"Top {top_n} Most Undervalued Stocks {f'in {sector}' if sector != 'All' else ''}")
     st.dataframe(disp, use_container_width=True, height=600, hide_index=True)
@@ -843,6 +788,9 @@ elif app_mode == "Top Undervalued Stocks":
     st.download_button("⬇️ Download CSV", disp.to_csv(index=False),
         f"top_undervalued_{sector.replace(' ','_')}_top{top_n}.csv", "text/csv")
 
+# --------------------------------------------------------------------------------------
+# FOOTER
+# --------------------------------------------------------------------------------------
 st.markdown("---")
 st.markdown("""
 <div style='text-align:center;color:#9CA3AF;font-size:0.8rem;padding:0.5rem'>
