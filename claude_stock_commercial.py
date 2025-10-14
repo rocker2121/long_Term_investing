@@ -10,6 +10,7 @@ import yfinance as yf
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 
 try:
     from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
@@ -24,6 +25,43 @@ except:
 
 st.set_page_config(page_title="S&P 500 Analyzer", page_icon="📊", layout="wide")
 
+# Google Analytics Integration
+def inject_ga():
+    """Inject Google Analytics tracking code"""
+    GA_ID = "G-598BZYJEBM"  # Your actual Measurement ID
+    
+    ga_code = f"""
+    <!-- Google tag (gtag.js) -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id={GA_ID}"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){{dataLayer.push(arguments);}}
+      gtag('js', new Date());
+      gtag('config', '{GA_ID}');
+    </script>
+    """
+    components.html(ga_code, height=0)
+
+# Initialize Google Analytics
+inject_ga()
+
+# Track custom events
+def track_event(event_name, event_params=None):
+    """Track custom events in Google Analytics"""
+    if event_params is None:
+        event_params = {}
+    
+    params_str = ", ".join([f"'{k}': '{v}'" for k, v in event_params.items()])
+    
+    ga_event = f"""
+    <script>
+      if (typeof gtag !== 'undefined') {{
+        gtag('event', '{event_name}', {{{params_str}}});
+      }}
+    </script>
+    """
+    components.html(ga_event, height=0)
+
 # Force light theme at root level
 st.markdown("""
 <script>
@@ -34,6 +72,23 @@ window.parent.document.documentElement.setAttribute('data-theme', 'light');
 
 st.markdown("""<style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+
+/* NUCLEAR OPTION - Force everything to light mode */
+* {
+  color-scheme: light !important;
+}
+html, body, #root, .stApp {
+  color-scheme: light !important;
+  background: #F9FAFB !important;
+}
+/* Force Streamlit container to light */
+[data-testid="stAppViewContainer"] {
+  background: #F9FAFB !important;
+}
+[data-testid="stApp"] {
+  background: #F9FAFB !important;
+}
+
 html,body,.stApp{font-family:'Inter',sans-serif!important;background:#F9FAFB}
 
 /* Fix top header bar */
@@ -448,6 +503,13 @@ if app_mode == "Single Stock Analysis":
     
     st.markdown("---")
     st.session_state.selected_symbol = selected
+    
+    # Track stock selection in Google Analytics
+    if selected:
+        track_event('stock_view', {
+            'stock_symbol': selected,
+            'mode': 'single_stock'
+        })
     
     if selected:
         ticker = yf.Ticker(selected)
