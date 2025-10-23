@@ -977,6 +977,36 @@ elif app_mode == "My Portfolio":
     # USER IS LOGGED IN - show portfolio
     st.markdown(f"Welcome back, **{st.session_state.user_data['email']}**!")
     
+    # DEBUG: Show if Google Sheets is working
+    with st.expander("🔧 Debug: Check Database Connection"):
+        if not GSPREAD_AVAILABLE:
+            st.error("❌ gspread library not installed")
+        else:
+            st.success("✅ gspread library installed")
+        
+        creds = st.secrets.get("gspread", None)
+        if not creds:
+            st.error("❌ No Google Sheets credentials in secrets")
+            st.info("💡 Your data is NOT being saved! Add gspread credentials to secrets.toml")
+        else:
+            st.success("✅ Credentials found in secrets")
+            st.code(f"Service Account: {creds.get('client_email', 'N/A')}")
+        
+        sheet = get_google_sheet()
+        if not sheet:
+            st.error("❌ Cannot connect to Google Sheet")
+            st.warning("Your portfolio is NOT being saved!")
+        else:
+            st.success("✅ Connected to Google Sheet!")
+            try:
+                url = sheet.spreadsheet.url
+                st.code(url)
+                st.markdown(f"[Open Sheet in Browser]({url})")
+            except:
+                st.error("Could not get sheet URL")
+    
+    st.markdown("---")
+    
     # Add stock
     st.markdown("### ➕ Add Stock")
     col1, col2 = st.columns([4, 1])
