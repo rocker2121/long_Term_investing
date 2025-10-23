@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+undervaluation_scored.csv#!/usr/bin/env python3
 """IntelliInvest - Complete S&P 500 Stock Analyzer with Authentication
    
    Features:
@@ -66,7 +66,7 @@ POSTHOG_KEY = st.secrets.get("POSTHOG_KEY", "phc_your_project_key_here")
 POSTHOG_HOST = st.secrets.get("POSTHOG_HOST", "https://app.posthog.com")
 APP_URL = "https://intellinvest.streamlit.app/"
 DEFAULT_VAL_PATH = st.secrets.get("VALUATION_CSV_URL",
-    "https://raw.githubusercontent.com/angadarora2024/IntelliInvest/main/valuation_scores.csv")
+    "https://raw.githubusercontent.com/angadarora2024/IntelliInvest/main/undervaluation_scored.csv")
 
 # --------------------------------------------------------------------------------------
 # AUTHENTICATION FUNCTIONS
