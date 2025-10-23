@@ -914,6 +914,41 @@ elif app_mode == "Top Undervalued Stocks":
 elif app_mode == "My Portfolio":
     st.title("💼 My Portfolio")
     
+    # CONNECTION STATUS - Show at top for easy checking
+    st.markdown("### 🔧 Connection Status")
+    
+    # Check gspread
+    if not GSPREAD_AVAILABLE:
+        st.error("❌ gspread library not installed")
+        st.info("💡 Add to requirements.txt: gspread==5.12.0")
+    else:
+        st.success("✅ gspread library installed")
+    
+    # Check credentials
+    creds = st.secrets.get("gspread", None)
+    if not creds:
+        st.error("❌ No Google Sheets credentials in secrets")
+        st.warning("⚠️ Your portfolio will NOT be saved! Add gspread credentials to secrets.toml")
+    else:
+        st.success("✅ Credentials found in secrets")
+        st.code(f"Service Account: {creds.get('client_email', 'N/A')}", language=None)
+    
+    # Check connection
+    sheet = get_google_sheet()
+    if not sheet:
+        st.error("❌ Cannot connect to Google Sheet")
+        st.warning("Your portfolio is NOT being saved!")
+    else:
+        st.success("✅ Connected to Google Sheet!")
+        try:
+            url = sheet.spreadsheet.url
+            st.markdown(f"**📊 Database URL:** {url}")
+            st.markdown(f"[Open Sheet in Browser]({url})")
+        except:
+            st.error("Could not get sheet URL")
+    
+    st.markdown("---")
+    
     # If not logged in, show login/signup
     if not st.session_state.logged_in:
         st.info("""
