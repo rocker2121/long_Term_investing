@@ -65,8 +65,7 @@ GA_API_SECRET = st.secrets.get("GA_API_SECRET", "PUT_YOUR_GA_API_SECRET")
 POSTHOG_KEY = st.secrets.get("POSTHOG_KEY", "phc_your_project_key_here")
 POSTHOG_HOST = st.secrets.get("POSTHOG_HOST", "https://app.posthog.com")
 APP_URL = "https://intellinvest.streamlit.app/"
-DEFAULT_VAL_PATH = st.secrets.get("VALUATION_CSV_URL",
-    "https://raw.githubusercontent.com/angadarora2024/IntelliInvest/main/undervaluation_scored.csv")
+DEFAULT_VAL_PATH = st.secrets.get("VALUATION_CSV_URL", "val_output/undervaluation_scored.csv")
 
 # --------------------------------------------------------------------------------------
 # AUTHENTICATION FUNCTIONS
@@ -315,11 +314,20 @@ def load_sp500_list():
 
 @st.cache_data(ttl=3600)
 def load_valuation_scores(path: str) -> pd.DataFrame:
-    """Load valuation scores from CSV. Returns empty DataFrame if not available."""
+    """Load valuation scores from CSV (local or remote). Returns empty DataFrame if not available."""
     try:
-        resp = requests.get(path, timeout=10)
-        resp.raise_for_status()
-        df = pd.read_csv(io.StringIO(resp.text))
+        # Check if it's a URL
+        if path.startswith('http://') or path.startswith('https://'):
+            resp = requests.get(path, timeout=10)
+            resp.raise_for_status()
+            df = pd.read_csv(io.StringIO(resp.text))
+        else:
+            # Local file
+            import os
+            if not os.path.exists(path):
+                return pd.DataFrame()
+            df = pd.read_csv(path)
+        
         df.dropna(subset=["Symbol"], inplace=True)
         df.sort_values("undervaluation_score", ascending=True, inplace=True)
         return df
@@ -486,108 +494,27 @@ news_api_key = st.secrets.get("NEWS_API_KEY", None)
 init_session()
 
 # --------------------------------------------------------------------------------------
-# AUTHENTICATION UI
-# --------------------------------------------------------------------------------------
-if not st.session_state.logged_in:
-    st.title("📊 IntelliInvest")
-    
-    st.markdown("""
-    <div style='text-align:center;padding:2rem;'>
-        <h2>Smart Stock Analysis with AI-Powered Insights</h2>
-        <p style='color:#6B7280;font-size:1.1rem;'>
-            Track your favorite stocks • Get valuation insights • Receive monthly updates
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    tab1, tab2 = st.tabs(["🔐 Login", "✨ Sign Up"])
-    
-    with tab1:
-        st.subheader("Welcome Back!")
-        
-        login_email = st.text_input("Email", key="login_email")
-        login_password = st.text_input("Password", type="password", key="login_password")
-        
-        col1, col2 = st.columns([1, 3])
-        with col1:
-            if st.button("Login", use_container_width=True, type="primary"):
-                if login_email and login_password:
-                    with st.spinner("Logging in..."):
-                        user_data = login_user(login_email, login_password)
-                        
-                        if user_data:
-                            st.session_state.logged_in = True
-                            st.session_state.user_data = user_data
-                            st.session_state.portfolio = user_data["portfolio"]
-                            
-                            ga_mp_send("user_login", {"email": login_email})
-                            st.success("✅ Welcome back!")
-                            st.rerun()
-                        else:
-                            st.error("❌ Invalid email or password")
-                else:
-                    st.warning("Please enter both email and password")
-    
-    with tab2:
-        st.subheader("Create Your Account")
-        st.caption("Track stocks and get personalized insights")
-        
-        signup_email = st.text_input("Email", key="signup_email")
-        signup_password = st.text_input("Password (min 6 characters)", type="password", key="signup_password")
-        signup_password_confirm = st.text_input("Confirm Password", type="password", key="signup_password_confirm")
-        
-        st.caption("Password requirements: At least 6 characters")
-        
-        if st.button("Create Account", use_container_width=True, type="primary"):
-            if not signup_email or "@" not in signup_email:
-                st.error("❌ Please enter a valid email")
-            elif len(signup_password) < 6:
-                st.error("❌ Password must be at least 6 characters")
-            elif signup_password != signup_password_confirm:
-                st.error("❌ Passwords don't match")
-            else:
-                with st.spinner("Creating your account..."):
-                    success = create_user(signup_email, signup_password, [])
-                    
-                    if success:
-                        user_data = login_user(signup_email, signup_password)
-                        if user_data:
-                            st.session_state.logged_in = True
-                            st.session_state.user_data = user_data
-                            st.session_state.portfolio = []
-                            
-                            ga_mp_send("user_signup", {"email": signup_email})
-                            st.success("✅ Account created! Welcome to IntelliInvest!")
-                            st.balloons()
-                            st.rerun()
-                    else:
-                        st.error("❌ Email already registered. Please login instead.")
-    
-    st.markdown("---")
-    st.markdown("""
-    <div style='text-align:center;color:#9CA3AF;font-size:0.8rem;padding:1rem'>
-        ⚠️ <strong>Disclaimer:</strong> Educational purposes only. Not financial advice.
-        Always consult a licensed financial advisor.<br><br>
-        Built by ANGAD ARORA
-    </div>
-    """, unsafe_allow_html=True)
-    
-    st.stop()
-
-# --------------------------------------------------------------------------------------
-# MAIN APP (Only shown when logged in)
+# SIDEBAR & NAVIGATION
 # --------------------------------------------------------------------------------------
 st.sidebar.title("📊 IntelliInvest")
 
-st.sidebar.info(f"""
-👤 **{st.session_state.user_data['email']}**
-
-📊 Tracking {len(st.session_state.portfolio)} stocks
-""")
-
-if st.sidebar.button("🚪 Logout", use_container_width=True):
-    logout()
-    st.rerun()
+# Show user info if logged in
+if st.session_state.logged_in:
+    st.sidebar.info(f"""
+    👤 **{st.session_state.user_data['email']}**
+    
+    📊 Tracking {len(st.session_state.portfolio)} stocks
+    """)
+    
+    if st.sidebar.button("🚪 Logout", use_container_width=True):
+        logout()
+        st.rerun()
+else:
+    st.sidebar.info("""
+    👋 **Guest Mode**
+    
+    Login to save your portfolio!
+    """)
 
 st.sidebar.markdown("---")
 
@@ -795,6 +722,90 @@ elif app_mode == "🏆 Top Undervalued Stocks":
 elif app_mode == "💼 My Portfolio":
     st.title("💼 My Portfolio")
     
+    # If not logged in, show login/signup option
+    if not st.session_state.logged_in:
+        st.info("""
+        👋 **Welcome to Portfolio Tracking!**
+        
+        Create an account to:
+        - Track your favorite stocks
+        - Save your portfolio across devices
+        - Get monthly email updates
+        - View real-time valuations
+        """)
+        
+        tab1, tab2 = st.tabs(["🔐 Login", "✨ Sign Up"])
+        
+        with tab1:
+            st.subheader("Welcome Back!")
+            
+            login_email = st.text_input("Email", key="login_email")
+            login_password = st.text_input("Password", type="password", key="login_password")
+            
+            if st.button("Login", use_container_width=True, type="primary"):
+                if login_email and login_password:
+                    with st.spinner("Logging in..."):
+                        user_data = login_user(login_email, login_password)
+                        
+                        if user_data:
+                            st.session_state.logged_in = True
+                            st.session_state.user_data = user_data
+                            st.session_state.portfolio = user_data["portfolio"]
+                            
+                            ga_mp_send("user_login", {"email": login_email})
+                            st.success("✅ Welcome back!")
+                            st.rerun()
+                        else:
+                            st.error("❌ Invalid email or password")
+                else:
+                    st.warning("Please enter both email and password")
+        
+        with tab2:
+            st.subheader("Create Your Account")
+            st.caption("Track stocks and get personalized insights")
+            
+            signup_email = st.text_input("Email", key="signup_email")
+            signup_password = st.text_input("Password (min 6 characters)", type="password", key="signup_password")
+            signup_password_confirm = st.text_input("Confirm Password", type="password", key="signup_password_confirm")
+            
+            st.caption("Password requirements: At least 6 characters")
+            
+            if st.button("Create Account", use_container_width=True, type="primary"):
+                if not signup_email or "@" not in signup_email:
+                    st.error("❌ Please enter a valid email")
+                elif len(signup_password) < 6:
+                    st.error("❌ Password must be at least 6 characters")
+                elif signup_password != signup_password_confirm:
+                    st.error("❌ Passwords don't match")
+                else:
+                    with st.spinner("Creating your account..."):
+                        success = create_user(signup_email, signup_password, [])
+                        
+                        if success:
+                            user_data = login_user(signup_email, signup_password)
+                            if user_data:
+                                st.session_state.logged_in = True
+                                st.session_state.user_data = user_data
+                                st.session_state.portfolio = []
+                                
+                                ga_mp_send("user_signup", {"email": signup_email})
+                                st.success("✅ Account created! Welcome to IntelliInvest!")
+                                st.balloons()
+                                st.rerun()
+                        else:
+                            st.error("❌ Email already registered. Please login instead.")
+        
+        st.markdown("---")
+        st.markdown("""
+        <div style='text-align:center;color:#9CA3AF;font-size:0.8rem;padding:1rem'>
+            ⚠️ <strong>Disclaimer:</strong> Educational purposes only. Not financial advice.
+            Always consult a licensed financial advisor.
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.stop()
+    
+    # USER IS LOGGED IN - Show portfolio
     st.markdown(f"""
     Welcome back, **{st.session_state.user_data['email']}**! 
     Track your favorite stocks and monitor their valuations.
