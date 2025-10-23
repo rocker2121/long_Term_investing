@@ -1,14 +1,25 @@
 #!/usr/bin/env python3
-"""S&P 500 Stock Analyzer
-   - VADER Sentiment
-   - GA4 Measurement Protocol (server-side)
-   - PostHog client (bridged) + server fallback
+"""IntelliInvest - Complete S&P 500 Stock Analyzer with Authentication
+   
+   Features:
+   - Email + Password authentication
+   - Portfolio tracking (persistent across devices)
+   - Stock analysis with valuation scores
+   - News sentiment analysis (VADER)
+   - Price targets & analyst ratings
+   - Multi-stock comparison
+   - Top undervalued stocks finder
+   - Monthly email updates (automated script available)
+   - Google Analytics & PostHog tracking
+   
+   Uses ONLY FREE services!
 """
 
 import io
 import json
 import uuid
-from datetime import date, timedelta
+import hashlib
+from datetime import date, timedelta, datetime
 
 import numpy as np
 import pandas as pd
@@ -30,27 +41,166 @@ try:
 except:
     NewsApiClient = None
 
+try:
+    import gspread
+    from google.oauth2.service_account import Credentials
+    GSPREAD_AVAILABLE = True
+except:
+    GSPREAD_AVAILABLE = False
+
 # --------------------------------------------------------------------------------------
 # PAGE SETUP
 # --------------------------------------------------------------------------------------
-st.set_page_config(page_title="S&P 500 Analyzer", page_icon="📊", layout="wide")
+st.set_page_config(page_title="IntelliInvest", page_icon="📊", layout="wide")
 
 # --------------------------------------------------------------------------------------
-# ANALYTICS CONFIG (edit these or set via st.secrets)
+# ANALYTICS CONFIG
 # --------------------------------------------------------------------------------------
-# Toggle analytics modules
-ENABLE_GA_MP = True                 # GA4 Measurement Protocol (server-side)
-ENABLE_POSTHOG_CLIENT = True        # PostHog client (JS) via components bridge
-ENABLE_POSTHOG_SERVER = True        # PostHog server-side capture
+ENABLE_GA_MP = True
+ENABLE_POSTHOG_CLIENT = True
+ENABLE_POSTHOG_SERVER = True
 
-# Prefer secrets if available
-GA_MEASUREMENT_ID = st.secrets.get("GA_MEASUREMENT_ID", "G-598BZYJEBM")  # <- your GA4 MEASUREMENT ID
-GA_API_SECRET     = st.secrets.get("GA_API_SECRET", "PUT_YOUR_GA_API_SECRET")  # <- create in GA4: Admin > Data Streams > Measurement Protocol API secret
-
-POSTHOG_KEY  = st.secrets.get("POSTHOG_KEY",  "phc_your_project_key_here")
-POSTHOG_HOST = st.secrets.get("POSTHOG_HOST", "https://app.posthog.com")   # or your self-hosted domain
-
+GA_MEASUREMENT_ID = st.secrets.get("GA_MEASUREMENT_ID", "G-598BZYJEBM")
+GA_API_SECRET = st.secrets.get("GA_API_SECRET", "PUT_YOUR_GA_API_SECRET")
+POSTHOG_KEY = st.secrets.get("POSTHOG_KEY", "phc_your_project_key_here")
+POSTHOG_HOST = st.secrets.get("POSTHOG_HOST", "https://app.posthog.com")
 APP_URL = "https://intellinvest.streamlit.app/"
+DEFAULT_VAL_PATH = st.secrets.get("VALUATION_CSV_URL",
+    "https://raw.githubusercontent.com/angadarora2024/IntelliInvest/main/valuation_scores.csv")
+
+# --------------------------------------------------------------------------------------
+# AUTHENTICATION FUNCTIONS
+# --------------------------------------------------------------------------------------
+def hash_password(password: str) -> str:
+    """Hash password with SHA-256"""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def verify_password(stored_hash: str, provided_password: str) -> bool:
+    """Verify password against stored hash"""
+    return stored_hash == hash_password(provided_password)
+
+def get_google_sheet():
+    """Get Google Sheets client"""
+    if not GSPREAD_AVAILABLE:
+        return None
+    
+    try:
+        creds_dict = st.secrets.get("gspread", None)
+        if not creds_dict:
+            return None
+        
+        scopes = [
+            'https://www.googleapis.com/auth/spreadsheets',
+            'https://www.googleapis.com/auth/drive'
+        ]
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+        client = gspread.authorize(creds)
+        
+        try:
+            sheet = client.open("IntelliInvest_Users").sheet1
+        except:
+            spreadsheet = client.create("IntelliInvest_Users")
+            sheet = spreadsheet.sheet1
+            sheet.append_row(["Email", "Password_Hash", "Portfolio", "User_ID", "Created_At", "Last_Login", "Status"])
+        
+        return sheet
+    except Exception as e:
+        st.error(f"Error connecting to Google Sheets: {str(e)}")
+        return None
+
+def create_user(email: str, password: str, portfolio: list) -> bool:
+    """Create new user account"""
+    sheet = get_google_sheet()
+    if not sheet:
+        return False
+    
+    try:
+        try:
+            existing = sheet.find(email, in_column=1)
+            if existing:
+                return False
+        except:
+            pass
+        
+        user_id = str(uuid.uuid4())
+        password_hash = hash_password(password)
+        portfolio_str = ",".join(portfolio)
+        timestamp = datetime.now().isoformat()
+        
+        sheet.append_row([email, password_hash, portfolio_str, user_id, timestamp, timestamp, "active"])
+        return True
+        
+    except Exception as e:
+        st.error(f"Error creating user: {str(e)}")
+        return False
+
+def login_user(email: str, password: str) -> dict:
+    """Login user and return their data"""
+    sheet = get_google_sheet()
+    if not sheet:
+        return None
+    
+    try:
+        cell = sheet.find(email, in_column=1)
+        if not cell:
+            return None
+        
+        row_values = sheet.row_values(cell.row)
+        stored_hash = row_values[1]
+        
+        if not verify_password(stored_hash, password):
+            return None
+        
+        sheet.update_cell(cell.row, 6, datetime.now().isoformat())
+        
+        portfolio_str = row_values[2]
+        portfolio = [s.strip() for s in portfolio_str.split(',') if s.strip()]
+        
+        return {
+            "email": email,
+            "portfolio": portfolio,
+            "user_id": row_values[3],
+            "created_at": row_values[4],
+            "row_num": cell.row
+        }
+        
+    except Exception as e:
+        st.error(f"Login error: {str(e)}")
+        return None
+
+def update_user_portfolio(email: str, portfolio: list) -> bool:
+    """Update user's portfolio"""
+    sheet = get_google_sheet()
+    if not sheet:
+        return False
+    
+    try:
+        cell = sheet.find(email, in_column=1)
+        if not cell:
+            return False
+        
+        portfolio_str = ",".join(portfolio)
+        sheet.update_cell(cell.row, 3, portfolio_str)
+        return True
+        
+    except Exception as e:
+        st.error(f"Error updating portfolio: {str(e)}")
+        return False
+
+def init_session():
+    """Initialize session state"""
+    if "logged_in" not in st.session_state:
+        st.session_state.logged_in = False
+    if "user_data" not in st.session_state:
+        st.session_state.user_data = None
+    if "portfolio" not in st.session_state:
+        st.session_state.portfolio = []
+
+def logout():
+    """Logout user"""
+    st.session_state.logged_in = False
+    st.session_state.user_data = None
+    st.session_state.portfolio = []
 
 # --------------------------------------------------------------------------------------
 # ANALYTICS HELPERS
@@ -61,22 +211,17 @@ def _ensure_session_id():
     return st.session_state["session_id"]
 
 def ga_mp_send(event_name: str, params: dict):
-    """Send GA4 event via Measurement Protocol (server-side)."""
     if not ENABLE_GA_MP:
         return
     try:
         cid = _ensure_session_id()
         url = f"https://www.google-analytics.com/mp/collect?measurement_id={GA_MEASUREMENT_ID}&api_secret={GA_API_SECRET}"
-        payload = {
-            "client_id": cid,
-            "events": [{"name": event_name, "params": params}],
-        }
+        payload = {"client_id": cid, "events": [{"name": event_name, "params": params}]}
         requests.post(url, json=payload, timeout=4)
     except Exception:
-        pass  # keep silent in prod
+        pass
 
 def posthog_server_capture(event_name: str, properties: dict):
-    """Server-side event to PostHog."""
     if not ENABLE_POSTHOG_SERVER:
         return
     try:
@@ -89,13 +234,11 @@ def posthog_server_capture(event_name: str, properties: dict):
             "distinct_id": distinct_id,
         }
         requests.post(url, data=json.dumps(payload),
-                      headers={"Content-Type": "application/json"},
-                      timeout=4)
+                      headers={"Content-Type": "application/json"}, timeout=4)
     except Exception:
         pass
 
 def posthog_client_boot():
-    """Load PostHog client inside a tiny components iframe and bridge it to the app window."""
     if not ENABLE_POSTHOG_CLIENT:
         return
     components.html(f"""
@@ -104,65 +247,32 @@ def posthog_client_boot():
   (function() {{
     try {{
       if (!window.parent.posthog) {{
-        // Load lightweight PostHog loader in this iframe
         var s = document.createElement('script'); s.async = true;
         s.src = '{POSTHOG_HOST}/static/array.js';
         s.onload = function() {{
           try {{
             window.posthog = window.posthog || [];
             window.posthog.init('{POSTHOG_KEY}', {{ api_host: '{POSTHOG_HOST}' }});
-            window.parent.posthog = window.posthog; // bridge to parent
-            console.log('[PostHog] client initialized & bridged');
-          }} catch(e) {{ console.error('[PostHog] init error', e); }}
+            window.parent.posthog = window.posthog;
+          }} catch(e) {{}}
         }};
         document.head.appendChild(s);
-      }} else {{
-        console.log('[PostHog] already available on parent');
       }}
-    }} catch (e) {{
-      console.warn('[PostHog] boot error', e);
-    }}
+    }} catch (e) {{}}
   }})();
 </script>
 </body></html>
 """, height=0)
 
-# Initialize client analytics (safe on every rerun)
 posthog_client_boot()
 
-# Send a one-time "app_start" (per session) + GA page_view
 if st.session_state.get("_sent_app_start") is None:
     st.session_state["_sent_app_start"] = True
-    # GA page_view (server)
-    ga_mp_send("page_view", {"page_title": "SP500 Analyzer", "page_location": APP_URL})
-    # PostHog (server)
-    posthog_server_capture("app_start", {"app": "sp500_analyzer"})
-    # PostHog (client) via bridged call
-    components.html("""
-<!doctype html><html><head><meta charset="utf-8"></head><body>
-<script>
-  (function fire(){
-    function send(){
-      try {
-        if (window.parent && window.parent.posthog) {
-          window.parent.posthog.capture('app_start', {app: 'sp500_analyzer'});
-          return true;
-        }
-      } catch(e){}
-      return false;
-    }
-    if(!send()){
-      let t=0; const it=setInterval(function(){
-        t++; if (send() || t>10) clearInterval(it);
-      }, 300);
-    }
-  })();
-</script>
-</body></html>
-""", height=0)
+    ga_mp_send("page_view", {"page_title": "IntelliInvest", "page_location": APP_URL})
+    posthog_server_capture("app_start", {"app": "intellinvest"})
 
 # --------------------------------------------------------------------------------------
-# LIGHT THEME / STYLES (unchanged)
+# STYLING
 # --------------------------------------------------------------------------------------
 st.markdown("""
 <script>
@@ -174,123 +284,56 @@ st.markdown("""<style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
 * { color-scheme: light !important; }
 html, body, #root, .stApp { color-scheme: light !important; background: #F9FAFB !important; }
-[data-testid="stAppViewContainer"], [data-testid="stApp"] { background: #F9FAFB !important; }
 html,body,.stApp{font-family:'Inter',sans-serif!important;background:#F9FAFB}
-header[data-testid="stHeader"], .stApp > header{background:#fff!important}
-button[kind="header"], button[data-testid="baseButton-header"]{color:#1F2937!important}
-button[data-testid="baseButton-header"] svg{color:#1F2937!important;fill:#1F2937!important}
-section[data-testid="stSidebarNav"]{background:#fff!important}
-div[data-testid="stSidebarNavItems"]{background:#fff!important}
-div[data-testid="stSidebarNavItems"] a, div[data-testid="stSidebarNavItems"] span{color:#1F2937!important}
 h1{font-size:2.5rem!important;font-weight:700!important;background:linear-gradient(135deg,#667eea,#764ba2);
 -webkit-background-clip:text;-webkit-text-fill-color:transparent}
 h2,h3{color:#1F2937!important}
-[data-baseweb="select"]{background:#fff!important}
-[data-baseweb="select"] > div{background:#fff!important;color:#1F2937!important;border:1px solid #E5E7EB!important}
-[data-baseweb="select"] [role="button"], [data-baseweb="select"] input, [data-baseweb="select"] span,
-[data-baseweb="select"] svg{background:#fff!important;color:#1F2937!important;fill:#1F2937!important}
-.stSelectbox > div > div{background:#fff!important;color:#1F2937!important}
-.stSelectbox label{color:#1F2937!important}
-.stMultiSelect > div > div, .stMultiSelect [data-baseweb="select"]{background:#fff!important;color:#1F2937!important}
-.stMultiSelect label, .stMultiSelect span{color:#1F2937!important}
-.stMultiSelect [data-baseweb="tag"]{background:#E5E7EB!important;color:#1F2937!important}
-.stNumberInput > div > div, .stNumberInput input{background:#fff!important;color:#1F2937!important;border:1px solid #E5E7EB!important}
-.stDateInput > div > div, .stDateInput input{background:#fff!important;color:#1F2937!important;border:1px solid #E5E7EB!important}
-.stTextInput > div > div, .stTextInput input{background:#fff!important;color:#1F2937!important;border:1px solid #E5E7EB!important}
-.stCheckbox, .stCheckbox > label, .stCheckbox span{color:#1F2937!important}
-.stRadio > label, .stRadio [role="radiogroup"] label, .stRadio [role="radiogroup"] span{color:#1F2937!important}
-[data-testid="stMetric"]{background:#fff;padding:1rem;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.1);border:1px solid #E5E7EB}
-[data-testid="stMetricValue"]{font-size:1.75rem!important;font-weight:700!important;color:#1F2937!important}
-[data-testid="stMetricLabel"]{color:#6B7280!important}
-div[data-testid="stExpander"]{background:#fff!important;border-radius:12px;border:1px solid #E5E7EB;margin-bottom:1rem}
-div[data-testid="stExpander"] summary{background:#fff!important;color:#1F2937!important;padding:1rem!important}
-div[data-testid="stExpander"] summary:hover{background:#F3F4F6!important}
-div[data-testid="stExpander"] div[data-testid="stExpanderDetails"]{background:#fff!important;padding:1rem!important}
-.stButton>button{background:linear-gradient(135deg,#667eea,#764ba2)!important;color:#fff!important;
-border:none!important;border-radius:8px!important;padding:.5rem 1.5rem!important;font-weight:600!important}
-.badge{display:inline-block;padding:.25rem .75rem;border-radius:9999px;font-size:.75rem;font-weight:600;text-transform:uppercase}
-.badge-success{background:#D1FAE5;color:#065F46}
-.badge-warning{background:#FEF3C7;color:#92400E}
-.badge-danger{background:#FEE2E2;color:#991B1B}
-.compact-metric [data-testid="stMetricValue"]{font-size:1.2rem!important}
-p, span, div, label{color:#1F2937!important}
-[data-testid="stCaption"]{color:#6B7280!important}
-section[data-testid="stSidebar"]{background:#fff!important}
-section[data-testid="stSidebar"] *{color:#1F2937!important}
-section[data-testid="stSidebar"] h2, section[data-testid="stSidebar"] label, section[data-testid="stSidebar"] p,
-section[data-testid="stSidebar"] span{color:#1F2937!important}
-section[data-testid="stSidebar"] div[data-testid="stMarkdownContainer"]{color:#1F2937!important}
-section[data-testid="stSidebar"] label[data-baseweb="radio"]{color:#1F2937!important}
-section[data-testid="stSidebar"] label[data-baseweb="radio"] > div{color:#1F2937!important}
-input, textarea{background:#fff!important;color:#1F2937!important;border:1px solid #E5E7EB!important}
-div[data-baseweb="input"] > div{background:#fff!important}
-div[data-baseweb="input"] input{color:#1F2937!important}
-@media (max-width: 768px) {
-  h1{font-size:1.75rem!important}
-  h2{font-size:1.5rem!important}
-  h3{font-size:1.25rem!important}
-  [data-testid="stMetric"]{padding:0.75rem!important}
-  [data-testid="stMetricValue"]{font-size:1.5rem!important}
-  [role="listbox"], ul, li{background:#fff!important;color:#1F2937!important}
-}
-body > div[class*="layer"], #root > div[class*="layer"], [data-baseweb="layer"]{ background:transparent!important; }
-[data-baseweb="menu"]{background:#fff!important}
-[data-baseweb="menu"] ul{background:#fff!important}
-[data-baseweb="menu"] li{background:#fff!important;color:#1F2937!important}
+.stMetric{background:#fff;padding:1rem;border-radius:0.75rem;border:1px solid #E5E7EB}
+button[kind="primary"]{background:linear-gradient(135deg,#667eea,#764ba2)!important;color:#fff!important}
+[data-testid="stExpander"]{background:#fff;border:1px solid #E5E7EB;border-radius:0.75rem}
 </style>""", unsafe_allow_html=True)
 
-DEFAULT_VAL_PATH = "val_output/undervaluation_scored.csv"
-
 # --------------------------------------------------------------------------------------
-# DATA HELPERS (unchanged)
+# DATA LOADING FUNCTIONS
 # --------------------------------------------------------------------------------------
 @st.cache_data(ttl=3600)
-def get_sp500_data():
+def load_sp500_list():
     try:
-        r = requests.get("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies",
-                         headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
-        df = pd.read_html(r.text)[0]
-        df["Symbol"] = df["Symbol"].str.replace(".", "-", regex=False)
-        return df[["Symbol", "Security", "GICS Sector"]]
+        url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+        tables = pd.read_html(url)
+        df = tables[0]
+        df.columns = df.columns.str.strip()
+        if "Symbol" not in df.columns and len(df.columns) > 0:
+            df.rename(columns={df.columns[0]: "Symbol"}, inplace=True)
+        if "Security" not in df.columns and len(df.columns) > 1:
+            df.rename(columns={df.columns[1]: "Security"}, inplace=True)
+        if "GICS Sector" in df.columns:
+            df.rename(columns={"GICS Sector": "Sector"}, inplace=True)
+        return df[["Symbol", "Security", "Sector"]]
     except:
-        r = requests.get("https://raw.githubusercontent.com/datasets/s-and-p-500-companies/master/data/constituents.csv")
-        df = pd.read_csv(io.StringIO(r.text))
-        df = df.rename(columns={"Name": "Security", "Sector": "GICS Sector"})
-        df["Symbol"] = df["Symbol"].str.replace(".", "-", regex=False)
-        return df[["Symbol", "Security", "GICS Sector"]]
+        return pd.DataFrame(columns=["Symbol", "Security", "Sector"])
 
 @st.cache_data(ttl=3600)
-def load_valuation_scores(csv_path):
+def load_valuation_scores(path: str) -> pd.DataFrame:
     try:
-        import os
-        if not os.path.exists(csv_path):
-            return pd.DataFrame()
-        df = pd.read_csv(csv_path)
-
-        # Normalize column names
-        if "ticker" in df.columns and "Symbol" not in df.columns:
-            df["Symbol"] = df["ticker"].str.upper()
-        elif "Ticker" in df.columns and "Symbol" not in df.columns:
-            df["Symbol"] = df["Ticker"].str.upper()
-        elif "Symbol" in df.columns:
-            df["Symbol"] = df["Symbol"].str.upper()
-
-        if "sector" in df.columns and "GICS Sector" not in df.columns:
-            df["GICS Sector"] = df["sector"]
-        elif "Sector" in df.columns and "GICS Sector" not in df.columns:
-            df["GICS Sector"] = df["Sector"]
-
-        sp = get_sp500_data()
-        if "Security" not in df.columns:
-            df = df.merge(sp[["Symbol", "Security"]], on="Symbol", how="left")
-        if "GICS Sector" not in df.columns:
-            df = df.merge(sp[["Symbol", "GICS Sector"]], on="Symbol", how="left")
-
-        df["Sector"] = df.get("GICS Sector", "Unknown")
+        resp = requests.get(path, timeout=10)
+        resp.raise_for_status()
+        df = pd.read_csv(io.StringIO(resp.text))
+        df.dropna(subset=["Symbol"], inplace=True)
+        df.sort_values("undervaluation_score", ascending=True, inplace=True)
         return df
     except Exception as e:
-        st.error(f"Error loading valuation data: {e}")
+        st.warning(f"Could not load valuation data: {e}")
         return pd.DataFrame()
+
+@st.cache_data(ttl=600)
+def get_current_price(ticker: str) -> float:
+    try:
+        t = yf.Ticker(ticker)
+        data = t.fast_info
+        return round(data.get("last_price", 0.0), 2)
+    except:
+        return 0.0
 
 @st.cache_resource
 def load_sentiment_model():
@@ -371,277 +414,257 @@ def get_price_targets_cached(symbol):
         hist = t.history(period="1d")
         last = float(hist["Close"][-1]) if not hist.empty else None
         try:
-            pt = t.analyst_price_targets or t.get_analyst_price_targets() or {}
+            info = t.info
+            mean = info.get("targetMeanPrice")
+            low = info.get("targetLowPrice")
+            high = info.get("targetHighPrice")
+            n = info.get("numberOfAnalystOpinions")
         except:
-            pt = {}
-        mean = pt.get("mean") or pt.get("targetMeanPrice")
-        low = pt.get("low") or pt.get("targetLowPrice")
-        high = pt.get("high") or pt.get("targetHighPrice")
-        n = pt.get("numberOfAnalysts") or pt.get("numAnalysts")
-        upside = (mean/last-1) if (mean and last) else None
+            mean, low, high, n = None, None, None, None
+        upside = ((mean/last)-1)*100 if (mean and last) else None
         return {"last": last, "mean": mean, "high": high, "low": low,
                 "n": int(n) if n else None, "upside": upside}
     except:
         return {"last": None, "mean": None, "high": None, "low": None, "n": None, "upside": None}
 
-def fmt_pct(x):   return f"{float(x):.2%}"  if x is not None and not pd.isna(x) else "N/A"
-def fmt_usd(x):   return f"${float(x):,.2f}" if x is not None and not pd.isna(x) else "N/A"
-def fmt_float(x): return f"{float(x):.2f}"   if x is not None and not pd.isna(x) else "N/A"
+@st.cache_data(ttl=3600)
+def get_analyst_ratings_cached(ticker: str) -> dict:
+    try:
+        t = yf.Ticker(ticker)
+        rec = t.recommendations
+        if rec is not None and not rec.empty:
+            latest = rec.iloc[-1]
+            buy = latest.get("strongBuy", 0) + latest.get("buy", 0)
+            hold = latest.get("hold", 0)
+            sell = latest.get("sell", 0) + latest.get("strongSell", 0)
+            total = buy + hold + sell
+            if total == 0:
+                return {"buy": 0, "hold": 0, "sell": 0, "n": 0, "avg": 3.0}
+            buy_pct = (buy / total) * 100
+            hold_pct = (hold / total) * 100
+            sell_pct = (sell / total) * 100
+            avg = (buy * 1 + hold * 3 + sell * 5) / total
+            return {"buy": buy_pct, "hold": hold_pct, "sell": sell_pct, "n": total, "avg": avg}
+        return {"buy": 0, "hold": 0, "sell": 0, "n": 0, "avg": 3.0}
+    except:
+        return {"buy": 0, "hold": 0, "sell": 0, "n": 0, "avg": 3.0}
+
+@st.cache_data(ttl=3600)
+def get_fundamentals_cached(ticker: str) -> dict:
+    try:
+        t = yf.Ticker(ticker)
+        info = t.info
+        return {
+            "rev": info.get("totalRevenue", 0) / 1e9,
+            "margin": info.get("profitMargins", 0) * 100,
+            "eps": info.get("trailingEps", 0),
+            "pe": info.get("trailingPE", 0),
+            "pb": info.get("priceToBook", 0),
+            "div": info.get("dividendYield", 0) * 100 if info.get("dividendYield") else 0
+        }
+    except:
+        return {"rev": 0, "margin": 0, "eps": 0, "pe": 0, "pb": 0, "div": 0}
+
+def fmt_usd(val): return f"${val:,.2f}" if val else "N/A"
+def fmt_pct(val): return f"{val:+.1f}%" if val else "N/A"
 
 # --------------------------------------------------------------------------------------
-# APP UI
+# LOAD DATA
 # --------------------------------------------------------------------------------------
-st.title("🔍 Key Stock Investment Metrics")
-st.caption("AI-Powered Valuation, Price Targets & Sentiment Analysis")
-
-st.markdown("""
-<div style='background:#FEF3C7;border-left:4px solid #F59E0B;padding:1rem;border-radius:8px;margin-bottom:1.5rem'>
-    <strong>⚠️ For Personal Use Only</strong><br>
-    This tool is for educational and personal research purposes only. Not intended for commercial use. 
-    Not financial advice. Always do your own research and consult with a financial advisor before making investment decisions.
-</div>
-""", unsafe_allow_html=True)
-
-st.markdown("""
-<details style='margin-bottom:1rem'>
-<summary style='cursor:pointer;color:#6B7280;font-size:0.85rem'>📚 Credits & Data Sources</summary>
-<div style='padding:0.5rem;font-size:0.85rem;color:#6B7280'>
-    <strong>Libraries & APIs:</strong><br>
-    • Streamlit • yfinance • Plotly • VADER • NewsAPI • pandas, numpy<br><br>
-    <strong>Data Sources:</strong><br>
-    • Stock prices & analyst ratings: Yahoo Finance<br>
-    • News: NewsAPI.org<br>
-    • S&P 500 list: Wikipedia
-</div>
-</details>
-""", unsafe_allow_html=True)
-
-st.sidebar.header("🧭 Navigation")
-app_mode = st.sidebar.radio("Mode", ("Single Stock Analysis", "Multi-Stock Comparison", "Top Undervalued Stocks"))
-
-# Get API keys (hidden from UI)
-try:
-    news_api_key = st.secrets.get("NEWS_API_KEY")
-except:
-    news_api_key = None
-
+sp500_df = load_sp500_list()
 val_path = DEFAULT_VAL_PATH
-sp500_df = get_sp500_data()
-index_dict = {"^GSPC": "S&P 500", "^NDX": "Nasdaq-100"}
+try:
+    val_df = load_valuation_scores(val_path)
+except:
+    val_df = pd.DataFrame()
+
+index_dict = {"^GSPC": "S&P 500", "^DJI": "Dow Jones", "^IXIC": "NASDAQ"}
+news_api_key = st.secrets.get("NEWS_API_KEY", None)
+
+# Initialize session
+init_session()
 
 # --------------------------------------------------------------------------------------
-# SINGLE STOCK ANALYSIS
+# AUTHENTICATION UI
 # --------------------------------------------------------------------------------------
-if app_mode == "Single Stock Analysis":
-    st.subheader("🔍 Stock Selection")
+if not st.session_state.logged_in:
+    st.title("📊 IntelliInvest")
+    
+    st.markdown("""
+    <div style='text-align:center;padding:2rem;'>
+        <h2>Smart Stock Analysis with AI-Powered Insights</h2>
+        <p style='color:#6B7280;font-size:1.1rem;'>
+            Track your favorite stocks • Get valuation insights • Receive monthly updates
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    tab1, tab2 = st.tabs(["🔐 Login", "✨ Sign Up"])
+    
+    with tab1:
+        st.subheader("Welcome Back!")
+        
+        login_email = st.text_input("Email", key="login_email")
+        login_password = st.text_input("Password", type="password", key="login_password")
+        
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            if st.button("Login", use_container_width=True, type="primary"):
+                if login_email and login_password:
+                    with st.spinner("Logging in..."):
+                        user_data = login_user(login_email, login_password)
+                        
+                        if user_data:
+                            st.session_state.logged_in = True
+                            st.session_state.user_data = user_data
+                            st.session_state.portfolio = user_data["portfolio"]
+                            
+                            ga_mp_send("user_login", {"email": login_email})
+                            st.success("✅ Welcome back!")
+                            st.rerun()
+                        else:
+                            st.error("❌ Invalid email or password")
+                else:
+                    st.warning("Please enter both email and password")
+    
+    with tab2:
+        st.subheader("Create Your Account")
+        st.caption("Track stocks and get personalized insights")
+        
+        signup_email = st.text_input("Email", key="signup_email")
+        signup_password = st.text_input("Password (min 6 characters)", type="password", key="signup_password")
+        signup_password_confirm = st.text_input("Confirm Password", type="password", key="signup_password_confirm")
+        
+        st.caption("Password requirements: At least 6 characters")
+        
+        if st.button("Create Account", use_container_width=True, type="primary"):
+            if not signup_email or "@" not in signup_email:
+                st.error("❌ Please enter a valid email")
+            elif len(signup_password) < 6:
+                st.error("❌ Password must be at least 6 characters")
+            elif signup_password != signup_password_confirm:
+                st.error("❌ Passwords don't match")
+            else:
+                with st.spinner("Creating your account..."):
+                    success = create_user(signup_email, signup_password, [])
+                    
+                    if success:
+                        user_data = login_user(signup_email, signup_password)
+                        if user_data:
+                            st.session_state.logged_in = True
+                            st.session_state.user_data = user_data
+                            st.session_state.portfolio = []
+                            
+                            ga_mp_send("user_signup", {"email": signup_email})
+                            st.success("✅ Account created! Welcome to IntelliInvest!")
+                            st.balloons()
+                            st.rerun()
+                    else:
+                        st.error("❌ Email already registered. Please login instead.")
+    
+    st.markdown("---")
+    st.markdown("""
+    <div style='text-align:center;color:#9CA3AF;font-size:0.8rem;padding:1rem'>
+        ⚠️ <strong>Disclaimer:</strong> Educational purposes only. Not financial advice.
+        Always consult a licensed financial advisor.<br><br>
+        Built by ANGAD ARORA
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.stop()
+
+# --------------------------------------------------------------------------------------
+# MAIN APP (Only shown when logged in)
+# --------------------------------------------------------------------------------------
+st.sidebar.title("📊 IntelliInvest")
+
+st.sidebar.info(f"""
+👤 **{st.session_state.user_data['email']}**
+
+📊 Tracking {len(st.session_state.portfolio)} stocks
+""")
+
+if st.sidebar.button("🚪 Logout", use_container_width=True):
+    logout()
+    st.rerun()
+
+st.sidebar.markdown("---")
+
+app_mode = st.sidebar.radio("", ["🔍 Stock Selection", "📊 Multi-Stock Comparison",
+                                  "🏆 Top Undervalued Stocks", "💼 My Portfolio"])
+
+# --------------------------------------------------------------------------------------
+# STOCK SELECTION PAGE
+# --------------------------------------------------------------------------------------
+if app_mode == "🔍 Stock Selection":
+    st.title("🔍 Stock Selection & Analysis")
+    
     company_dict = pd.Series(sp500_df["Security"].values, index=sp500_df["Symbol"]).to_dict()
     full_list = {**index_dict, **company_dict}
-
-    selected = st.selectbox(
-        "Select Stock",
-        list(full_list.keys()),
-        index=list(full_list.keys()).index("AAPL") if "AAPL" in full_list else 0,
-        format_func=lambda s: f"{full_list.get(s,s)} ({s})"
-    )
-
+    
+    selected = st.selectbox("Select Stock", list(full_list.keys()), 
+                           index=list(full_list.keys()).index("AAPL") if "AAPL" in full_list else 0,
+                           format_func=lambda s: f"{full_list.get(s,s)} ({s})")
+    
     st.markdown("---")
-    st.session_state.selected_symbol = selected
-
-    # Deduped analytics on selection change
-    if "last_tracked_symbol" not in st.session_state:
-        st.session_state["last_tracked_symbol"] = None
-
-    if selected and st.session_state["last_tracked_symbol"] != selected:
-        st.session_state["last_tracked_symbol"] = selected
-
-        # GA4 (server)
-        ga_mp_send("stock_view", {"stock_symbol": selected, "mode": "single_stock"})
-
-        # PostHog (server)
-        posthog_server_capture("stock_view", {"stock_symbol": selected, "mode": "single_stock"})
-
-        # PostHog (client) via bridged call
-        components.html(f"""
-<!doctype html><html><head><meta charset="utf-8"></head><body>
-<script>
-  (function send(){{
-    function go(){{
-      try {{
-        if (window.parent && window.parent.posthog) {{
-          window.parent.posthog.capture('stock_view', {{
-            stock_symbol: '{selected}', mode: 'single_stock'
-          }});
-          return true;
-        }}
-      }} catch(e){{}}
-      return false;
-    }}
-    if (!go()) {{
-      let tries=0; const t=setInterval(function(){{
-        tries++; if (go()||tries>10) clearInterval(t);
-      }}, 300);
-    }}
-  }})();
-</script>
-</body></html>
-""", height=0)
-
-    if selected:
-        ticker = yf.Ticker(selected)
+    
+    if selected not in index_dict:
         company = full_list.get(selected, selected)
-        st.header(f"📈 {company}")
-        st.caption(f"**{selected}**")
-
-        # FINANCIAL METRICS
-        if selected not in index_dict:
-            with st.expander("💰 Financial Metrics", expanded=True):
-                try:
-                    info = ticker.info
-                    qf = ticker.quarterly_financials
-                    c1, c2, c3, c4 = st.columns(4)
-                    try:
-                        c1.metric("Q Revenue", f"${qf.loc['Total Revenue'][0]/1e9:.2f}B")
-                    except:
-                        c1.metric("Q Revenue", "N/A")
-                    c2.metric("Margin", fmt_pct(info.get("profitMargins", 0)))
-                    c3.metric("EPS", fmt_float(info.get("trailingEps", 0)))
-                    c4.metric("P/E", fmt_float(info.get("trailingPE", 0)))
-                except:
-                    st.warning("⚠️ Data unavailable")
-
-        # VALUATION & ANALYST RATINGS
-        if selected not in index_dict:
-            col_left, col_right = st.columns(2)
-
-            with col_left:
-                try:
-                    val_df = load_valuation_scores(val_path)
-                    st.subheader("📊 Valuation Gauge")
-                    if val_df.empty or "Symbol" not in val_df.columns:
-                        st.info("Valuation data not available")
-                    else:
-                        row = val_df[val_df["Symbol"].str.upper() == selected.upper()]
-                        if not row.empty and "undervaluation_score" in row.columns:
-                            score = float(row.iloc[0]["undervaluation_score"])
-                            sector_name = row.iloc[0].get("Sector", row.iloc[0].get("GICS Sector", "Unknown"))
-                            badge = "success" if score <= 3 else "warning" if score <= 7 else "danger"
-                            label = "Undervalued" if score <= 3 else "Fairly Valued" if score <= 7 else "Overvalued"
-                            st.markdown(f'<span class="badge badge-{badge}">{label}</span>', unsafe_allow_html=True)
-                            st.markdown(f"""
-                            <div style="margin-top:1rem">
-                              <div style="display:flex;justify-content:space-between;font-size:0.75rem;color:#6B7280;margin-bottom:0.25rem">
-                                <span>Undervalued</span><span>Fairly Valued</span><span>Overvalued</span>
-                              </div>
-                              <div style="width:100%;height:8px;background:linear-gradient(to right, #10B981, #FCD34D, #EF4444);border-radius:4px;position:relative">
-                                <div style="position:absolute;left:{(score-1)/9*100}%;top:-4px;width:16px;height:16px;background:#1F2937;border-radius:50%;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.2)"></div>
-                              </div>
-                              <div style="display:flex;justify-content:space-between;font-size:0.7rem;color:#9CA3AF;margin-top:0.5rem">
-                                <span>1</span><span>5</span><span>10</span>
-                              </div>
-                            </div>
-                            <div style='margin-top:1rem;text-align:center;padding:1rem;background:#F9FAFB;border-radius:8px'>
-                              <div style='font-size:2rem;font-weight:700;color:#1F2937'>{score:.1f}<span style='font-size:1.2rem;color:#6B7280'>/10</span></div>
-                              <div style='font-size:0.9rem;color:#6B7280;margin-top:0.5rem'>Sector: {sector_name}</div>
-                            </div>
-                            """, unsafe_allow_html=True)
-                            with st.expander("ℹ️ How is this calculated?"):
-                                st.markdown("""
-**Undervaluation Score (1–10)** combines:
-- P/E vs sector, P/B vs history, P/S vs peers
-- PEG, EV/EBITDA, EV/Sales
-- Dividend yield vs peers
-
-1–3: Undervalued · 4–7: Fair · 8–10: Overvalued
-*Not financial advice.*
-""")
-                        else:
-                            st.info(f"No valuation data for {selected}")
-                except Exception as e:
-                    st.warning(f"⚠️ Valuation: {str(e)}")
-
-            with col_right:
-                st.subheader("⭐ Analyst Ratings")
-                try:
-                    recs = ticker.recommendations_summary
-                    if recs is not None and not recs.empty:
-                        s = recs.iloc[-1]
-                        rating_values = {"strongBuy": 1, "buy": 2, "hold": 3, "sell": 4, "strongSell": 5}
-                        total_ratings, weighted_sum = 0, 0
-                        for key, val in rating_values.items():
-                            if key in s.index and s[key] > 0:
-                                cnt = int(s[key]); total_ratings += cnt; weighted_sum += cnt * val
-                        if total_ratings > 0:
-                            avg = weighted_sum / total_ratings
-                            st.markdown(f"""
-                            <div style="margin-top:1rem">
-                              <div style="display:flex;justify-content:space-between;font-size:0.75rem;color:#6B7280;margin-bottom:0.25rem">
-                                <span>Strong Buy</span><span>Hold</span><span>Strong Sell</span>
-                              </div>
-                              <div style="width:100%;height:12px;background:linear-gradient(to right,#10B981,#34D399,#FCD34D,#FB923C,#EF4444);border-radius:6px;position:relative">
-                                <div style="position:absolute;left:{(avg-1)/4*100}%;top:-2px;width:20px;height:20px;background:#1F2937;border-radius:50%;border:3px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.3)"></div>
-                              </div>
-                              <div style="display:flex;justify-content:space-between;font-size:0.7rem;color:#9CA3AF;margin-top:0.5rem">
-                                <span>1</span><span>2</span><span>3</span><span>4</span><span>5</span>
-                              </div>
-                            </div>
-                            """, unsafe_allow_html=True)
-                            if   avg <= 1.5: label, color = "Strong Buy", "#10B981"
-                            elif avg <= 2.5: label, color = "Buy", "#34D399"
-                            elif avg <= 3.5: label, color = "Hold", "#FCD34D"
-                            elif avg <= 4.5: label, color = "Sell", "#FB923C"
-                            else:           label, color = "Strong Sell", "#EF4444"
-                            st.markdown(f"""
-                            <div style='margin-top:1rem;text-align:center;padding:1rem;background:#F9FAFB;border-radius:8px'>
-                              <div style='font-size:1.75rem;font-weight:700;color:{color}'>{label}</div>
-                              <div style='font-size:0.9rem;color:#6B7280;margin-top:0.5rem'>
-                                Avg Rating: {avg:.2f} | {total_ratings} analysts
-                              </div>
-                            </div>
-                            """, unsafe_allow_html=True)
-                            with st.expander("📊 Rating Breakdown"):
-                                for key in ["strongBuy","buy","hold","sell","strongSell"]:
-                                    if key in s.index and s[key] > 0:
-                                        st.write(f"**{key.replace('strong','Strong ')}:** {int(s[key])}")
-                        else:
-                            st.info("No rating data")
-                    else:
-                        st.info("No ratings available")
-                except Exception as e:
-                    st.warning(f"⚠️ No ratings: {str(e)}")
-
-        # NEWS SENTIMENT
-        if selected not in index_dict:
-            if news_api_key and NewsApiClient:
-                with st.expander("📰 News Sentiment (VADER Analysis)", expanded=False):
-                    st.caption("Earnings, forecasts, guidance, analyst ratings - excludes daily price moves")
-                    bull, bear, n, _ = analyze_news_sentiment(news_api_key, company, 5)
-                    if isinstance(bull, str):
-                        st.info(f"ℹ️ {bull}")
-                    else:
-                        c1, c2, c3 = st.columns(3)
-                        c1.metric("🟢 Bullish", f"{bull:.1f}%")
-                        c2.metric("🔴 Bearish", f"{bear:.1f}%")
-                        c3.metric("📊 Neutral", f"{100-bull-bear:.1f}%")
-                        st.caption(f"Based on {n} forward-looking articles (VADER sentiment)")
-            else:
-                with st.expander("📰 News Sentiment", expanded=False):
-                    st.info("News API not configured. Add NEWS_API_KEY to Streamlit secrets.")
-
-        # PRICE TARGETS
-        if selected not in index_dict:
-            with st.expander("🎯 Price Targets", expanded=True):
-                pt = get_price_targets_cached(selected)
+        sector = sp500_df[sp500_df["Symbol"] == selected]["Sector"].iloc[0] \
+            if selected in sp500_df["Symbol"].values else "Unknown"
+        
+        st.subheader(f"{company} ({selected})")
+        st.caption(f"Sector: {sector}")
+        
+        # FUNDAMENTALS
+        with st.expander("📊 Fundamentals", expanded=True):
+            fund = get_fundamentals_cached(selected)
+            c1, c2, c3, c4, c5, c6 = st.columns(6)
+            c1.metric("Revenue (B)", f"${fund['rev']:.1f}B")
+            c2.metric("Margin", f"{fund['margin']:.1f}%")
+            c3.metric("EPS", f"${fund['eps']:.2f}")
+            c4.metric("P/E", f"{fund['pe']:.1f}")
+            c5.metric("P/B", f"{fund['pb']:.2f}")
+            c6.metric("Div Yield", f"{fund['div']:.2f}%")
+        
+        # ANALYST RATINGS
+        with st.expander("👥 Analyst Ratings", expanded=True):
+            ratings = get_analyst_ratings_cached(selected)
+            if ratings["n"]:
                 c1, c2, c3, c4 = st.columns(4)
-                c1.metric("💵 Current", fmt_usd(pt["last"]))
-                c2.metric("🎯 Mean", fmt_usd(pt["mean"]))
-                with c3:
-                    st.markdown('<div class="compact-metric">', unsafe_allow_html=True)
-                    st.metric("📊 High/Low", f"{fmt_usd(pt['high'])}/{fmt_usd(pt['low'])}")
-                    st.markdown('</div>', unsafe_allow_html=True)
-                c4.metric("📈 Upside", fmt_pct(pt["upside"]))
-                if pt["n"]:
-                    st.caption(f"**{pt['n']} analysts**")
-
+                c1.metric("🟢 Buy", f"{ratings['buy']:.0f}%")
+                c2.metric("🟡 Hold", f"{ratings['hold']:.0f}%")
+                c3.metric("🔴 Sell", f"{ratings['sell']:.0f}%")
+                c4.metric("📊 Total", ratings['n'])
+                st.caption(f"**Avg Rating:** {ratings['avg']:.1f}/5 (1=Strong Buy, 5=Strong Sell)")
+            else:
+                st.info("No analyst ratings available")
+        
+        # NEWS SENTIMENT
+        if news_api_key and NewsApiClient:
+            with st.expander("📰 News Sentiment (VADER Analysis)", expanded=False):
+                st.caption("Earnings, forecasts, guidance, analyst ratings - excludes daily price moves")
+                bull, bear, n, _ = analyze_news_sentiment(news_api_key, company, 5)
+                if isinstance(bull, str):
+                    st.info(f"ℹ️ {bull}")
+                else:
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("🟢 Bullish", f"{bull:.1f}%")
+                    c2.metric("🔴 Bearish", f"{bear:.1f}%")
+                    c3.metric("📊 Neutral", f"{100-bull-bear:.1f}%")
+                    st.caption(f"Based on {n} forward-looking articles (VADER sentiment)")
+        
+        # PRICE TARGETS
+        with st.expander("🎯 Price Targets", expanded=True):
+            pt = get_price_targets_cached(selected)
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("💵 Current", fmt_usd(pt["last"]))
+            c2.metric("🎯 Mean", fmt_usd(pt["mean"]))
+            c3.metric("📊 High/Low", f"{fmt_usd(pt['high'])}/{fmt_usd(pt['low'])}")
+            c4.metric("📈 Upside", fmt_pct(pt["upside"]))
+            if pt["n"]:
+                st.caption(f"**{pt['n']} analysts**")
+        
         # PRICE HISTORY
         with st.expander("📈 Price History", expanded=False):
             hist = yf.Ticker(selected).history(period="5y")
@@ -650,37 +673,15 @@ if app_mode == "Single Stock Analysis":
                 fig.add_trace(go.Scatter(x=hist.index, y=hist['Close'],
                     mode='lines', line=dict(color='#3B82F6', width=2)))
                 fig.update_layout(title=f"{selected} - 5Y", xaxis_title="Date",
-                    yaxis_title="Price", height=400, margin=dict(l=40, r=40, t=40, b=40))
+                    yaxis_title="Price", height=400)
                 st.plotly_chart(fig, use_container_width=True)
 
-        # NEWS ARTICLES
-        if selected not in index_dict and news_api_key and NewsApiClient:
-            st.markdown("---")
-            st.subheader("📰 Latest News & Analysis")
-            try:
-                _, _, _, articles = analyze_news_sentiment(news_api_key, company, 5)
-                if articles:
-                    st.caption(f"Found {len(articles)} forward-looking articles")
-                    for i, a in enumerate(articles[:10]):
-                        col1, col2 = st.columns([1, 4])
-                        with col1:
-                            if a.get("image_url"):
-                                st.image(a["image_url"], width=120)
-                        with col2:
-                            st.markdown(f"**[{a['title']}]({a['link']})**")
-                            st.caption(f"📰 {a['publisher']}")
-                        if i < min(9, len(articles) - 1):
-                            st.divider()
-                else:
-                    st.info("No recent articles found")
-            except Exception as e:
-                st.warning(f"Could not load news: {str(e)}")
-
 # --------------------------------------------------------------------------------------
-# MULTI-STOCK COMPARISON
+# MULTI-STOCK COMPARISON PAGE
 # --------------------------------------------------------------------------------------
-elif app_mode == "Multi-Stock Comparison":
-    st.subheader("📊 Comparison")
+elif app_mode == "📊 Multi-Stock Comparison":
+    st.title("📊 Multi-Stock Comparison")
+    
     company_dict = pd.Series(sp500_df["Security"].values, index=sp500_df["Symbol"]).to_dict()
     full_list = {**index_dict, **company_dict}
 
@@ -713,16 +714,11 @@ elif app_mode == "Multi-Stock Comparison":
             st.plotly_chart(fig, use_container_width=True)
 
 # --------------------------------------------------------------------------------------
-# TOP UNDERVALUED STOCKS
+# TOP UNDERVALUED STOCKS PAGE
 # --------------------------------------------------------------------------------------
-elif app_mode == "Top Undervalued Stocks":
-    st.header("🏆 Top Undervalued Stocks Right Now")
-    try:
-        val_df = load_valuation_scores(val_path)
-    except Exception as e:
-        st.error(f"❌ {e}")
-        st.stop()
-
+elif app_mode == "🏆 Top Undervalued Stocks":
+    st.title("🏆 Top Undervalued Stocks")
+    
     if val_df.empty:
         st.warning("No valuation data available")
         st.stop()
@@ -789,11 +785,110 @@ elif app_mode == "Top Undervalued Stocks":
         f"top_undervalued_{sector.replace(' ','_')}_top{top_n}.csv", "text/csv")
 
 # --------------------------------------------------------------------------------------
+# MY PORTFOLIO PAGE
+# --------------------------------------------------------------------------------------
+elif app_mode == "💼 My Portfolio":
+    st.title("💼 My Portfolio")
+    
+    st.markdown(f"""
+    Welcome back, **{st.session_state.user_data['email']}**! 
+    Track your favorite stocks and monitor their valuations.
+    """)
+    
+    # Add stock section
+    st.markdown("### ➕ Add Stock to Track")
+    col1, col2 = st.columns([4, 1])
+    
+    with col1:
+        all_symbols = sp500_df["Symbol"].tolist()
+        ticker_input = st.selectbox(
+            "Select a stock",
+            [""] + all_symbols,
+            format_func=lambda x: f"{x} - {sp500_df[sp500_df['Symbol']==x]['Security'].iloc[0]}" if x and x in all_symbols else "Select a stock..."
+        )
+    
+    with col2:
+        st.write("")
+        st.write("")
+        if st.button("Add", use_container_width=True, type="primary"):
+            if ticker_input and ticker_input not in st.session_state.portfolio:
+                st.session_state.portfolio.append(ticker_input)
+                update_user_portfolio(st.session_state.user_data['email'], st.session_state.portfolio)
+                st.success(f"✅ Added {ticker_input}")
+                ga_mp_send("portfolio_add", {"ticker": ticker_input})
+                st.rerun()
+            elif ticker_input in st.session_state.portfolio:
+                st.warning(f"⚠️ {ticker_input} already in portfolio")
+    
+    st.markdown("---")
+    
+    # Display portfolio
+    if st.session_state.portfolio:
+        st.markdown("### 📊 Your Tracked Stocks")
+        
+        for ticker in st.session_state.portfolio:
+            try:
+                price = get_current_price(ticker)
+                
+                if not val_df.empty and ticker in val_df["Symbol"].values:
+                    score = val_df[val_df["Symbol"] == ticker]["undervaluation_score"].iloc[0]
+                else:
+                    score = 5.0
+                
+                company = sp500_df[sp500_df["Symbol"] == ticker]["Security"].iloc[0] if ticker in sp500_df["Symbol"].values else ticker
+                
+                col1, col2, col3, col4 = st.columns([3, 2, 2, 1])
+                
+                with col1:
+                    st.markdown(f"**{ticker}** - {company}")
+                
+                with col2:
+                    if score <= 3.5:
+                        color, label = "🟢", "Undervalued"
+                    elif score <= 6.5:
+                        color, label = "🟡", "Fair Value"
+                    else:
+                        color, label = "🔴", "Overvalued"
+                    st.metric("Valuation", f"{color} {score}/10")
+                    st.caption(label)
+                
+                with col3:
+                    st.metric("Price", fmt_usd(price))
+                
+                with col4:
+                    st.write("")
+                    if st.button("🗑️", key=f"del_{ticker}"):
+                        st.session_state.portfolio.remove(ticker)
+                        update_user_portfolio(st.session_state.user_data['email'], st.session_state.portfolio)
+                        ga_mp_send("portfolio_remove", {"ticker": ticker})
+                        st.rerun()
+                
+                st.divider()
+            except:
+                pass
+        
+        # Email preferences
+        st.markdown("### 📧 Email Preferences")
+        st.info("""
+        ✅ **You're subscribed to monthly updates!**
+        
+        You'll receive monthly emails with:
+        - Valuation changes for your tracked stocks
+        - Undervalued opportunities
+        - Price target updates
+        """)
+        
+    else:
+        st.info("👆 Add stocks above to start tracking")
+
+# --------------------------------------------------------------------------------------
 # FOOTER
 # --------------------------------------------------------------------------------------
 st.markdown("---")
 st.markdown("""
 <div style='text-align:center;color:#9CA3AF;font-size:0.8rem;padding:0.5rem'>
-    Built by ANGAD ARORA
+    Built by ANGAD ARORA | 
+    <a href="https://github.com/angadarora2024" style="color:#9CA3AF">GitHub</a> | 
+    <a href="https://linkedin.com/in/angadarora" style="color:#9CA3AF">LinkedIn</a>
 </div>
 """, unsafe_allow_html=True)
