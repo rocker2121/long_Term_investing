@@ -3,12 +3,14 @@
    - VADER Sentiment
    - GA4 Measurement Protocol (server-side)
    - PostHog client (bridged) + server fallback
+   - OPTIONAL: Portfolio tracking with login (4th page only)
 """
 
 import io
 import json
 import uuid
-from datetime import date, timedelta
+import hashlib
+from datetime import date, timedelta, datetime
 
 import numpy as np
 import pandas as pd
@@ -29,6 +31,13 @@ try:
     from newsapi import NewsApiClient
 except:
     NewsApiClient = None
+
+try:
+    import gspread
+    from google.oauth2.service_account import Credentials
+    GSPREAD_AVAILABLE = True
+except:
+    GSPREAD_AVAILABLE = False
 
 # --------------------------------------------------------------------------------------
 # PAGE SETUP
@@ -239,6 +248,101 @@ body > div[class*="layer"], #root > div[class*="layer"], [data-baseweb="layer"]{
 [data-baseweb="menu"] li{background:#fff!important;color:#1F2937!important}
 </style>""", unsafe_allow_html=True)
 
+# --------------------------------------------------------------------------------------
+# AUTHENTICATION FUNCTIONS (for Portfolio page only)
+# --------------------------------------------------------------------------------------
+def hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def verify_password(stored_hash: str, provided_password: str) -> bool:
+    return stored_hash == hash_password(provided_password)
+
+def get_google_sheet():
+    if not GSPREAD_AVAILABLE:
+        return None
+    try:
+        creds_dict = st.secrets.get("gspread", None)
+        if not creds_dict:
+            return None
+        scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+        client = gspread.authorize(creds)
+        try:
+            sheet = client.open("IntelliInvest_Users").sheet1
+        except:
+            spreadsheet = client.create("IntelliInvest_Users")
+            sheet = spreadsheet.sheet1
+            sheet.append_row(["Email", "Password_Hash", "Portfolio", "User_ID", "Created_At", "Last_Login", "Status"])
+        return sheet
+    except:
+        return None
+
+def create_user(email: str, password: str, portfolio: list) -> bool:
+    sheet = get_google_sheet()
+    if not sheet:
+        return False
+    try:
+        try:
+            existing = sheet.find(email, in_column=1)
+            if existing:
+                return False
+        except:
+            pass
+        user_id = str(uuid.uuid4())
+        password_hash = hash_password(password)
+        portfolio_str = ",".join(portfolio)
+        timestamp = datetime.now().isoformat()
+        sheet.append_row([email, password_hash, portfolio_str, user_id, timestamp, timestamp, "active"])
+        return True
+    except:
+        return False
+
+def login_user(email: str, password: str) -> dict:
+    sheet = get_google_sheet()
+    if not sheet:
+        return None
+    try:
+        cell = sheet.find(email, in_column=1)
+        if not cell:
+            return None
+        row_values = sheet.row_values(cell.row)
+        stored_hash = row_values[1]
+        if not verify_password(stored_hash, password):
+            return None
+        sheet.update_cell(cell.row, 6, datetime.now().isoformat())
+        portfolio_str = row_values[2]
+        portfolio = [s.strip() for s in portfolio_str.split(',') if s.strip()]
+        return {"email": email, "portfolio": portfolio, "user_id": row_values[3], "created_at": row_values[4], "row_num": cell.row}
+    except:
+        return None
+
+def update_user_portfolio(email: str, portfolio: list) -> bool:
+    sheet = get_google_sheet()
+    if not sheet:
+        return False
+    try:
+        cell = sheet.find(email, in_column=1)
+        if not cell:
+            return False
+        portfolio_str = ",".join(portfolio)
+        sheet.update_cell(cell.row, 3, portfolio_str)
+        return True
+    except:
+        return False
+
+def init_auth_session():
+    if "logged_in" not in st.session_state:
+        st.session_state.logged_in = False
+    if "user_data" not in st.session_state:
+        st.session_state.user_data = None
+    if "portfolio" not in st.session_state:
+        st.session_state.portfolio = []
+
+def logout():
+    st.session_state.logged_in = False
+    st.session_state.user_data = None
+    st.session_state.portfolio = []
+
 DEFAULT_VAL_PATH = "val_output/undervaluation_scored.csv"
 
 # --------------------------------------------------------------------------------------
@@ -417,7 +521,23 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.sidebar.header("🧭 Navigation")
-app_mode = st.sidebar.radio("Mode", ("Single Stock Analysis", "Multi-Stock Comparison", "Top Undervalued Stocks"))
+app_mode = st.sidebar.radio("Mode", ("Single Stock Analysis", "Multi-Stock Comparison", "Top Undervalued Stocks", "My Portfolio")
+
+)
+
+# Initialize auth session
+init_auth_session()
+
+# Show user info if logged in
+if st.session_state.logged_in and app_mode == "My Portfolio":
+    st.sidebar.markdown("---")
+    st.sidebar.info(f"""
+    👤 **{st.session_state.user_data['email']}**
+    📊 Tracking {len(st.session_state.portfolio)} stocks
+    """)
+    if st.sidebar.button("🚪 Logout"):
+        logout()
+        st.rerun()
 
 # Get API keys (hidden from UI)
 try:
@@ -787,6 +907,123 @@ elif app_mode == "Top Undervalued Stocks":
 
     st.download_button("⬇️ Download CSV", disp.to_csv(index=False),
         f"top_undervalued_{sector.replace(' ','_')}_top{top_n}.csv", "text/csv")
+
+# --------------------------------------------------------------------------------------
+# MY PORTFOLIO (NEW - OPTIONAL 4TH PAGE)
+# --------------------------------------------------------------------------------------
+elif app_mode == "My Portfolio":
+    st.title("💼 My Portfolio")
+    
+    # If not logged in, show login/signup
+    if not st.session_state.logged_in:
+        st.info("""
+        👋 **Welcome to Portfolio Tracking!**
+        
+        Create a free account to:
+        - Track your favorite stocks
+        - Save portfolio across devices
+        - Get monthly email updates
+        """)
+        
+        tab1, tab2 = st.tabs(["🔐 Login", "✨ Sign Up"])
+        
+        with tab1:
+            st.subheader("Welcome Back!")
+            login_email = st.text_input("Email", key="login_email")
+            login_password = st.text_input("Password", type="password", key="login_password")
+            
+            if st.button("Login", type="primary"):
+                if login_email and login_password:
+                    user_data = login_user(login_email, login_password)
+                    if user_data:
+                        st.session_state.logged_in = True
+                        st.session_state.user_data = user_data
+                        st.session_state.portfolio = user_data["portfolio"]
+                        st.success("✅ Welcome back!")
+                        st.rerun()
+                    else:
+                        st.error("❌ Invalid email or password")
+                else:
+                    st.warning("Please enter both fields")
+        
+        with tab2:
+            st.subheader("Create Your Account")
+            signup_email = st.text_input("Email", key="signup_email")
+            signup_password = st.text_input("Password (min 6 characters)", type="password", key="signup_password")
+            signup_password_confirm = st.text_input("Confirm Password", type="password", key="signup_password_confirm")
+            
+            if st.button("Create Account", type="primary"):
+                if not signup_email or "@" not in signup_email:
+                    st.error("❌ Please enter a valid email")
+                elif len(signup_password) < 6:
+                    st.error("❌ Password must be at least 6 characters")
+                elif signup_password != signup_password_confirm:
+                    st.error("❌ Passwords don't match")
+                else:
+                    success = create_user(signup_email, signup_password, [])
+                    if success:
+                        user_data = login_user(signup_email, signup_password)
+                        if user_data:
+                            st.session_state.logged_in = True
+                            st.session_state.user_data = user_data
+                            st.session_state.portfolio = []
+                            st.success("✅ Account created!")
+                            st.balloons()
+                            st.rerun()
+                    else:
+                        st.error("❌ Email already registered")
+        st.stop()
+    
+    # USER IS LOGGED IN - show portfolio
+    st.markdown(f"Welcome back, **{st.session_state.user_data['email']}**!")
+    
+    # Add stock
+    st.markdown("### ➕ Add Stock")
+    col1, col2 = st.columns([4, 1])
+    with col1:
+        all_symbols = sp500_df["Symbol"].tolist()
+        ticker_input = st.selectbox(
+            "Select stock",
+            [""] + all_symbols,
+            format_func=lambda x: f"{x} - {sp500_df[sp500_df['Symbol']==x]['Security'].iloc[0]}" if x and x in all_symbols else "Select..."
+        )
+    with col2:
+        st.write(""); st.write("")
+        if st.button("Add", type="primary"):
+            if ticker_input and ticker_input not in st.session_state.portfolio:
+                st.session_state.portfolio.append(ticker_input)
+                update_user_portfolio(st.session_state.user_data['email'], st.session_state.portfolio)
+                st.success(f"✅ Added {ticker_input}")
+                st.rerun()
+            elif ticker_input in st.session_state.portfolio:
+                st.warning(f"⚠️ Already in portfolio")
+    
+    st.markdown("---")
+    
+    # Display portfolio
+    if st.session_state.portfolio:
+        st.markdown("### 📊 Your Stocks")
+        for ticker in st.session_state.portfolio:
+            try:
+                price = yf.Ticker(ticker).fast_info.last_price
+                company = sp500_df[sp500_df["Symbol"]==ticker]["Security"].iloc[0] if ticker in sp500_df["Symbol"].values else ticker
+                col1, col2, col3 = st.columns([3, 2, 1])
+                with col1:
+                    st.markdown(f"**{ticker}** - {company}")
+                with col2:
+                    st.metric("Price", f"${price:,.2f}")
+                with col3:
+                    if st.button("🗑️", key=f"del_{ticker}"):
+                        st.session_state.portfolio.remove(ticker)
+                        update_user_portfolio(st.session_state.user_data['email'], st.session_state.portfolio)
+                        st.rerun()
+                st.divider()
+            except:
+                pass
+        
+        st.info("✅ You'll receive monthly email updates about these stocks!")
+    else:
+        st.info("👆 Add stocks above to start tracking")
 
 # --------------------------------------------------------------------------------------
 # FOOTER
