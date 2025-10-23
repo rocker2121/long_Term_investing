@@ -1,4 +1,4 @@
-undervaluation_scored.csv#!/usr/bin/env python3
+#!/usr/bin/env python3
 """IntelliInvest - Complete S&P 500 Stock Analyzer with Authentication
    
    Features:
@@ -315,6 +315,7 @@ def load_sp500_list():
 
 @st.cache_data(ttl=3600)
 def load_valuation_scores(path: str) -> pd.DataFrame:
+    """Load valuation scores from CSV. Returns empty DataFrame if not available."""
     try:
         resp = requests.get(path, timeout=10)
         resp.raise_for_status()
@@ -323,7 +324,7 @@ def load_valuation_scores(path: str) -> pd.DataFrame:
         df.sort_values("undervaluation_score", ascending=True, inplace=True)
         return df
     except Exception as e:
-        st.warning(f"Could not load valuation data: {e}")
+        # Valuation data is optional - app works without it
         return pd.DataFrame()
 
 @st.cache_data(ttl=600)
@@ -590,8 +591,12 @@ if st.sidebar.button("🚪 Logout", use_container_width=True):
 
 st.sidebar.markdown("---")
 
-app_mode = st.sidebar.radio("", ["🔍 Stock Selection", "📊 Multi-Stock Comparison",
-                                  "🏆 Top Undervalued Stocks", "💼 My Portfolio"])
+# Navigation - only show Top Undervalued if we have valuation data
+nav_options = ["🔍 Stock Selection", "📊 Multi-Stock Comparison", "💼 My Portfolio"]
+if not val_df.empty:
+    nav_options.insert(2, "🏆 Top Undervalued Stocks")
+
+app_mode = st.sidebar.radio("", nav_options)
 
 # --------------------------------------------------------------------------------------
 # STOCK SELECTION PAGE
@@ -830,10 +835,22 @@ elif app_mode == "💼 My Portfolio":
             try:
                 price = get_current_price(ticker)
                 
+                # Get valuation score
                 if not val_df.empty and ticker in val_df["Symbol"].values:
                     score = val_df[val_df["Symbol"] == ticker]["undervaluation_score"].iloc[0]
                 else:
-                    score = 5.0
+                    # Simple scoring based on P/E ratio when valuation data unavailable
+                    fund = get_fundamentals_cached(ticker)
+                    pe = fund.get('pe', 15)
+                    if pe and pe > 0:
+                        if pe < 15:
+                            score = 3.5  # Undervalued
+                        elif pe < 25:
+                            score = 5.5  # Fair value
+                        else:
+                            score = 7.5  # Overvalued
+                    else:
+                        score = 5.0  # Default neutral
                 
                 company = sp500_df[sp500_df["Symbol"] == ticker]["Security"].iloc[0] if ticker in sp500_df["Symbol"].values else ticker
                 
