@@ -1387,14 +1387,23 @@ Best regards,
                         if not current_price:
                             continue
                         
-                        # Get historical data
-                        hist_1y = t.history(period="1y")
+                        # Get historical data - fetch enough based on add date
+                        days_since_added = (datetime.now() - added_date).days
                         
-                        if hist_1y.empty:
+                        if days_since_added > 730:  # More than 2 years
+                            hist_period = "5y"
+                        elif days_since_added > 365:  # More than 1 year
+                            hist_period = "2y"
+                        else:
+                            hist_period = "1y"
+                        
+                        hist_data = t.history(period=hist_period)
+                        
+                        if hist_data.empty:
                             continue
                         
                         # Calculate return from add date
-                        added_data = hist_1y[hist_1y.index >= added_date]
+                        added_data = hist_data[hist_data.index >= added_date]
                         if not added_data.empty and len(added_data) > 0:
                             price_at_add = added_data["Close"].iloc[0]
                             return_pct = ((current_price / price_at_add) - 1) * 100
@@ -1593,29 +1602,40 @@ Best regards,
                 company = sp500_df[sp500_df["Symbol"] == ticker]["Security"].iloc[0] if ticker in sp500_df["Symbol"].values else ticker
                 
                 # Get historical data for performance calculation
-                hist_1y = t.history(period="1y")
+                # Calculate how far back we need to go
+                days_since_added = (datetime.now() - added_date).days
                 
-                if hist_1y.empty:
+                # Get appropriate history period (max 5 years to avoid too much data)
+                if days_since_added > 730:  # More than 2 years
+                    hist_period = "5y"
+                elif days_since_added > 365:  # More than 1 year
+                    hist_period = "2y"
+                else:
+                    hist_period = "1y"
+                
+                hist_data = t.history(period=hist_period)
+                
+                if hist_data.empty:
                     continue
                 
                 # Calculate performance metrics
                 # 1 Day
                 try:
-                    price_1d_ago = hist_1y["Close"][-2] if len(hist_1y) >= 2 else current_price
+                    price_1d_ago = hist_data["Close"][-2] if len(hist_data) >= 2 else current_price
                     pct_1d = ((current_price / price_1d_ago) - 1) * 100
                 except:
                     pct_1d = 0
                 
                 # 1 Week
                 try:
-                    price_1w_ago = hist_1y["Close"][-6] if len(hist_1y) >= 6 else current_price
+                    price_1w_ago = hist_data["Close"][-6] if len(hist_1y) >= 6 else current_price
                     pct_1w = ((current_price / price_1w_ago) - 1) * 100
                 except:
                     pct_1w = 0
                 
                 # 1 Month
                 try:
-                    price_1m_ago = hist_1y["Close"][-22] if len(hist_1y) >= 22 else current_price
+                    price_1m_ago = hist_data["Close"][-22] if len(hist_1y) >= 22 else current_price
                     pct_1m = ((current_price / price_1m_ago) - 1) * 100
                 except:
                     pct_1m = 0
@@ -1623,7 +1643,7 @@ Best regards,
                 # YTD (Year to Date)
                 try:
                     year_start = datetime(datetime.now().year, 1, 1)
-                    ytd_data = hist_1y[hist_1y.index >= year_start]
+                    ytd_data = hist_data[hist_1y.index >= year_start]
                     if not ytd_data.empty:
                         price_ytd = ytd_data["Close"].iloc[0]
                         pct_ytd = ((current_price / price_ytd) - 1) * 100
@@ -1634,7 +1654,7 @@ Best regards,
                 
                 # Since Added - calculate return from actual date added
                 try:
-                    added_data = hist_1y[hist_1y.index >= added_date]
+                    added_data = hist_data[hist_1y.index >= added_date]
                     if not added_data.empty and len(added_data) > 0:
                         price_at_add = added_data["Close"].iloc[0]
                         pct_since_added = ((current_price / price_at_add) - 1) * 100
