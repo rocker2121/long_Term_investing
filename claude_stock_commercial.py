@@ -330,6 +330,125 @@ def update_user_portfolio(email: str, portfolio: list) -> bool:
     except:
         return False
 
+# OAuth Functions
+def generate_oauth_url():
+    """Generate Google OAuth URL"""
+    try:
+        oauth_config = st.secrets.get("oauth", {})
+        if not oauth_config:
+            return None
+        
+        client_id = oauth_config.get("google_client_id")
+        redirect_uri = oauth_config.get("redirect_uri")
+        
+        if not client_id or not redirect_uri:
+            return None
+        
+        import urllib.parse
+        
+        params = {
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "response_type": "code",
+            "scope": "openid email profile",
+            "access_type": "offline",
+            "prompt": "select_account"
+        }
+        
+        query_string = urllib.parse.urlencode(params)
+        return f"https://accounts.google.com/o/oauth2/v2/auth?{query_string}"
+    except:
+        return None
+
+def exchange_code_for_token(code):
+    """Exchange OAuth code for user info"""
+    try:
+        oauth_config = st.secrets.get("oauth", {})
+        if not oauth_config:
+            return None
+        
+        # Exchange code for token
+        token_url = "https://oauth2.googleapis.com/token"
+        data = {
+            "code": code,
+            "client_id": oauth_config.get("google_client_id"),
+            "client_secret": oauth_config.get("google_client_secret"),
+            "redirect_uri": oauth_config.get("redirect_uri"),
+            "grant_type": "authorization_code"
+        }
+        
+        response = requests.post(token_url, data=data)
+        token_data = response.json()
+        
+        if "access_token" not in token_data:
+            return None
+        
+        # Get user info
+        userinfo_url = "https://www.googleapis.com/oauth2/v2/userinfo"
+        headers = {"Authorization": f"Bearer {token_data['access_token']}"}
+        user_response = requests.get(userinfo_url, headers=headers)
+        user_info = user_response.json()
+        
+        return {
+            "email": user_info.get("email"),
+            "name": user_info.get("name"),
+            "picture": user_info.get("picture")
+        }
+    except Exception as e:
+        return None
+
+def get_or_create_oauth_user(email, name=None):
+    """Get existing user or create new one for OAuth login"""
+    sheet = get_google_sheet()
+    if not sheet:
+        return None
+    
+    try:
+        records = sheet.get_all_records()
+        
+        # Check if user exists
+        user = next((u for u in records if u['Email'].lower() == email.lower()), None)
+        
+        if user:
+            # Update last login
+            for idx, record in enumerate(records, start=2):
+                if record['Email'].lower() == email.lower():
+                    sheet.update_cell(idx, 6, datetime.now().isoformat())  # Last_Login
+                    break
+            
+            portfolio_str = user.get('Portfolio', '')
+            return {
+                "email": user['Email'],
+                "portfolio": portfolio_str.split(',') if portfolio_str else [],
+                "user_id": user.get('User_ID', str(uuid.uuid4())),
+                "auth_method": "oauth"
+            }
+        else:
+            # Create new user with OAuth
+            user_id = str(uuid.uuid4())
+            now = datetime.now().isoformat()
+            
+            new_row = [
+                email,
+                "OAUTH_USER",  # No password for OAuth users
+                "",  # Empty portfolio
+                user_id,
+                now,  # Created_At
+                now,  # Last_Login
+                "active"
+            ]
+            
+            sheet.append_row(new_row)
+            
+            return {
+                "email": email,
+                "portfolio": [],
+                "user_id": user_id,
+                "auth_method": "oauth"
+            }
+    except Exception as e:
+        return None
+
 def init_auth_session():
     if "logged_in" not in st.session_state:
         st.session_state.logged_in = False
@@ -914,80 +1033,28 @@ elif app_mode == "Top Undervalued Stocks":
 elif app_mode == "My Portfolio":
     st.title("💼 My Portfolio")
     
-    # CONNECTION STATUS - Show at top for easy checking
-    st.markdown("### 🔧 Connection Status")
-    
-    # Check gspread
-    if not GSPREAD_AVAILABLE:
-        st.error("❌ gspread library not installed")
-        st.info("💡 Add to requirements.txt: gspread==5.12.0")
-    else:
-        st.success("✅ gspread library installed")
-    
-    # Check credentials
-    creds = st.secrets.get("gspread", None)
-    if not creds:
-        st.error("❌ No Google Sheets credentials in secrets")
-        st.warning("⚠️ Your portfolio will NOT be saved! Add gspread credentials to secrets.toml")
-    else:
-        st.success("✅ Credentials found in secrets")
-        st.code(f"Service Account: {creds.get('client_email', 'N/A')}", language=None)
-    
-    # Check connection
-    sheet = get_google_sheet()
-    if not sheet:
-        st.error("❌ Cannot connect to Google Sheet")
-        st.warning("Your portfolio is NOT being saved!")
+    # Handle OAuth callback
+    query_params = st.query_params
+    if "code" in query_params and not st.session_state.logged_in:
+        code = query_params["code"]
+        user_info = exchange_code_for_token(code)
         
-        # Show detailed error
-        with st.expander("🔍 Debug: Show Connection Error"):
-            try:
-                import gspread
-                from google.oauth2.service_account import Credentials
-                
-                creds_dict = st.secrets.get("gspread")
-                if creds_dict:
-                    st.write("**Attempting connection...**")
-                    
-                    # Try to connect with detailed error
-                    try:
-                        scopes = [
-                            'https://www.googleapis.com/auth/spreadsheets',
-                            'https://www.googleapis.com/auth/drive'
-                        ]
-                        creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
-                        client = gspread.authorize(creds)
-                        st.success("✅ Authorized successfully")
-                        
-                        # Try to open or create sheet
-                        try:
-                            sheet_test = client.open("IntelliInvest_Users")
-                            st.success(f"✅ Sheet found! URL: {sheet_test.url}")
-                        except gspread.SpreadsheetNotFound:
-                            st.warning("Sheet doesn't exist yet, trying to create...")
-                            try:
-                                spreadsheet = client.create("IntelliInvest_Users")
-                                st.success(f"✅ Sheet created! URL: {spreadsheet.url}")
-                            except Exception as e:
-                                st.error(f"❌ Cannot create sheet: {str(e)}")
-                                st.info("💡 Solution: Create the sheet manually in Google Drive")
-                        except Exception as e:
-                            st.error(f"❌ Error opening sheet: {str(e)}")
-                    except Exception as e:
-                        st.error(f"❌ Authorization failed: {str(e)}")
-                        st.code(str(type(e).__name__))
-            except Exception as e:
-                st.error(f"❌ Debug failed: {str(e)}")
-    else:
-        st.success("✅ Connected to Google Sheet!")
-        try:
-            url = sheet.spreadsheet.url
-            st.markdown(f"**📊 Database URL:** {url}")
-            st.markdown(f"[Open Sheet in Browser]({url})")
-        except:
-            st.error("Could not get sheet URL")
-    
-    st.markdown("---")
+        if user_info and user_info.get("email"):
+            user_data = get_or_create_oauth_user(user_info["email"], user_info.get("name"))
+            
+            if user_data:
+                st.session_state.logged_in = True
+                st.session_state.user_data = user_data
+                st.session_state.portfolio = user_data["portfolio"]
+                # Clear query params
+                st.query_params.clear()
+                st.success("✅ Logged in with Google!")
+                st.balloons()
+                st.rerun()
+            else:
+                st.error("❌ Could not create user account")
+        else:
+            st.error("❌ OAuth login failed")
     
     # If not logged in, show login/signup
     if not st.session_state.logged_in:
@@ -1000,14 +1067,26 @@ elif app_mode == "My Portfolio":
         - Get monthly email updates
         """)
         
-        tab1, tab2 = st.tabs(["🔐 Login", "✨ Sign Up"])
+        tab1, tab2, tab3 = st.tabs(["🔐 Login", "✨ Sign Up", "🔑 Forgot Password"])
         
         with tab1:
             st.subheader("Welcome Back!")
+            
+            # OAuth Login Button
+            oauth_url = generate_oauth_url()
+            if oauth_url:
+                st.markdown("#### 🚀 Quick Login")
+                if st.button("🔐 Login with Google", type="primary", use_container_width=True):
+                    st.markdown(f'<meta http-equiv="refresh" content="0;url={oauth_url}">', unsafe_allow_html=True)
+                    st.info("Redirecting to Google...")
+                
+                st.markdown("---")
+                st.markdown("#### 📧 Or Login with Email")
+            
             login_email = st.text_input("Email", key="login_email")
             login_password = st.text_input("Password", type="password", key="login_password")
             
-            if st.button("Login", type="primary"):
+            if st.button("Login", type="secondary" if oauth_url else "primary"):
                 if login_email and login_password:
                     user_data = login_user(login_email, login_password)
                     if user_data:
@@ -1047,6 +1126,90 @@ elif app_mode == "My Portfolio":
                             st.rerun()
                     else:
                         st.error("❌ Email already registered")
+        
+        with tab3:
+            st.subheader("🔑 Reset Your Password")
+            st.info("💡 Enter your email to receive a temporary password.")
+            
+            reset_email = st.text_input("Email Address", key="reset_email")
+            
+            if st.button("Send Reset Email", type="primary"):
+                if reset_email and "@" in reset_email:
+                    sheet = get_google_sheet()
+                    if sheet:
+                        try:
+                            records = sheet.get_all_records()
+                            user = next((u for u in records if u['Email'].lower() == reset_email.lower()), None)
+                            
+                            if user:
+                                # Generate temporary password
+                                import random
+                                import string
+                                temp_password = ''.join(random.choices(string.ascii_letters + string.digits, k=12))
+                                temp_password_hash = hashlib.sha256(temp_password.encode()).hexdigest()
+                                
+                                # Update password in sheet
+                                for idx, record in enumerate(records, start=2):
+                                    if record['Email'].lower() == reset_email.lower():
+                                        sheet.update_cell(idx, 2, temp_password_hash)
+                                        break
+                                
+                                # Send email
+                                try:
+                                    import smtplib
+                                    from email.mime.text import MIMEText
+                                    from email.mime.multipart import MIMEMultipart
+                                    
+                                    email_config = st.secrets.get("email", {})
+                                    
+                                    if email_config:
+                                        msg = MIMEMultipart()
+                                        msg['From'] = email_config["sender_email"]
+                                        msg['To'] = reset_email
+                                        msg['Subject'] = f"{email_config.get('app_name', 'App')} - Password Reset"
+                                        
+                                        body = f"""Hello,
+
+Your password has been reset for {email_config.get('app_name', 'our app')}.
+
+Your temporary password is: {temp_password}
+
+Please login and change your password immediately for security.
+
+If you didn't request this reset, please contact support immediately.
+
+Best regards,
+{email_config.get('app_name', 'App')} Team
+"""
+                                        
+                                        msg.attach(MIMEText(body, 'plain'))
+                                        
+                                        # Send email
+                                        server = smtplib.SMTP(email_config["smtp_server"], int(email_config["smtp_port"]))
+                                        server.starttls()
+                                        server.login(email_config["sender_email"], email_config["sender_password"])
+                                        server.send_message(msg)
+                                        server.quit()
+                                        
+                                        st.success(f"✅ Password reset email sent to {reset_email}!")
+                                        st.info("📧 Please check your email (and spam folder) for the temporary password.")
+                                    else:
+                                        st.error("❌ Email service not configured")
+                                        st.info("Please contact support for password reset.")
+                                        
+                                except Exception as e:
+                                    st.error(f"❌ Could not send email: {str(e)}")
+                                    st.warning("Please contact support for manual password reset.")
+                            else:
+                                # Security: Don't reveal if email exists
+                                st.info(f"If an account exists for {reset_email}, a password reset email has been sent.")
+                                st.caption("Please check your email (including spam folder).")
+                        except Exception as e:
+                            st.error("❌ Error processing request. Please try again later.")
+                    else:
+                        st.error("❌ Database connection error. Please try again later.")
+                else:
+                    st.warning("⚠️ Please enter a valid email address")
         st.stop()
     
     # USER IS LOGGED IN - show portfolio
