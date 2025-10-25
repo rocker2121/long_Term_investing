@@ -272,12 +272,13 @@ def get_google_sheet():
         except:
             spreadsheet = client.create("IntelliInvest_Users")
             sheet = spreadsheet.sheet1
-            sheet.append_row(["Email", "Password_Hash", "Portfolio", "User_ID", "Created_At", "Last_Login", "Status"])
+            sheet.append_row(["Email", "Password_Hash", "Portfolio_JSON", "User_ID", "Created_At", "Last_Login", "Status"])
         return sheet
     except:
         return None
 
-def create_user(email: str, password: str, portfolio: list) -> bool:
+def create_user(email: str, password: str, portfolio: dict = None) -> bool:
+    """Create new user. Portfolio is dict: {ticker: date_added}"""
     sheet = get_google_sheet()
     if not sheet:
         return False
@@ -290,9 +291,9 @@ def create_user(email: str, password: str, portfolio: list) -> bool:
             pass
         user_id = str(uuid.uuid4())
         password_hash = hash_password(password)
-        portfolio_str = ",".join(portfolio)
+        portfolio_json = json.dumps(portfolio if portfolio else {})
         timestamp = datetime.now().isoformat()
-        sheet.append_row([email, password_hash, portfolio_str, user_id, timestamp, timestamp, "active"])
+        sheet.append_row([email, password_hash, portfolio_json, user_id, timestamp, timestamp, "active"])
         return True
     except:
         return False
@@ -310,13 +311,29 @@ def login_user(email: str, password: str) -> dict:
         if not verify_password(stored_hash, password):
             return None
         sheet.update_cell(cell.row, 6, datetime.now().isoformat())
-        portfolio_str = row_values[2]
-        portfolio = [s.strip() for s in portfolio_str.split(',') if s.strip()]
-        return {"email": email, "portfolio": portfolio, "user_id": row_values[3], "created_at": row_values[4], "row_num": cell.row}
+        
+        # Handle both old format (comma-separated) and new format (JSON)
+        portfolio_str = row_values[2] if len(row_values) > 2 else ""
+        try:
+            # Try to parse as JSON first (new format)
+            portfolio_data = json.loads(portfolio_str) if portfolio_str else {}
+        except:
+            # Fallback to old format (comma-separated, no dates)
+            old_stocks = [s.strip() for s in portfolio_str.split(',') if s.strip()]
+            portfolio_data = {stock: datetime.now().isoformat() for stock in old_stocks}
+        
+        return {
+            "email": email,
+            "portfolio": portfolio_data,  # Now dict: {ticker: date_added}
+            "user_id": row_values[3] if len(row_values) > 3 else str(uuid.uuid4()),
+            "created_at": row_values[4] if len(row_values) > 4 else datetime.now().isoformat(),
+            "row_num": cell.row
+        }
     except:
         return None
 
-def update_user_portfolio(email: str, portfolio: list) -> bool:
+def update_user_portfolio(email: str, portfolio: dict) -> bool:
+    """Update user portfolio. Portfolio is dict: {ticker: date_added}"""
     sheet = get_google_sheet()
     if not sheet:
         return False
@@ -324,8 +341,8 @@ def update_user_portfolio(email: str, portfolio: list) -> bool:
         cell = sheet.find(email, in_column=1)
         if not cell:
             return False
-        portfolio_str = ",".join(portfolio)
-        sheet.update_cell(cell.row, 3, portfolio_str)
+        portfolio_json = json.dumps(portfolio)
+        sheet.update_cell(cell.row, 3, portfolio_json)
         return True
     except:
         return False
@@ -416,10 +433,18 @@ def get_or_create_oauth_user(email, name=None):
                     sheet.update_cell(idx, 6, datetime.now().isoformat())  # Last_Login
                     break
             
-            portfolio_str = user.get('Portfolio', '')
+            # Handle both old and new portfolio format
+            portfolio_str = user.get('Portfolio_JSON', user.get('Portfolio', ''))
+            try:
+                portfolio_data = json.loads(portfolio_str) if portfolio_str else {}
+            except:
+                # Old format fallback
+                old_stocks = [s.strip() for s in portfolio_str.split(',') if s.strip()]
+                portfolio_data = {stock: datetime.now().isoformat() for stock in old_stocks}
+            
             return {
                 "email": user['Email'],
-                "portfolio": portfolio_str.split(',') if portfolio_str else [],
+                "portfolio": portfolio_data,
                 "user_id": user.get('User_ID', str(uuid.uuid4())),
                 "auth_method": "oauth"
             }
@@ -431,7 +456,7 @@ def get_or_create_oauth_user(email, name=None):
             new_row = [
                 email,
                 "OAUTH_USER",  # No password for OAuth users
-                "",  # Empty portfolio
+                "{}",  # Empty JSON portfolio
                 user_id,
                 now,  # Created_At
                 now,  # Last_Login
@@ -442,7 +467,7 @@ def get_or_create_oauth_user(email, name=None):
             
             return {
                 "email": email,
-                "portfolio": [],
+                "portfolio": {},
                 "user_id": user_id,
                 "auth_method": "oauth"
             }
@@ -455,7 +480,7 @@ def init_auth_session():
     if "user_data" not in st.session_state:
         st.session_state.user_data = None
     if "portfolio" not in st.session_state:
-        st.session_state.portfolio = []
+        st.session_state.portfolio = {}
 
 def logout():
     st.session_state.logged_in = False
@@ -1114,7 +1139,7 @@ elif app_mode == "My Portfolio":
                 elif signup_password != signup_password_confirm:
                     st.error("❌ Passwords don't match")
                 else:
-                    success = create_user(signup_email, signup_password, [])
+                    success = create_user(signup_email, signup_password, {})
                     if success:
                         user_data = login_user(signup_email, signup_password)
                         if user_data:
@@ -1216,35 +1241,6 @@ Best regards,
     st.markdown(f"Welcome back, **{st.session_state.user_data['email']}**!")
     
     # DEBUG: Show if Google Sheets is working
-    with st.expander("🔧 Debug: Check Database Connection"):
-        if not GSPREAD_AVAILABLE:
-            st.error("❌ gspread library not installed")
-        else:
-            st.success("✅ gspread library installed")
-        
-        creds = st.secrets.get("gspread", None)
-        if not creds:
-            st.error("❌ No Google Sheets credentials in secrets")
-            st.info("💡 Your data is NOT being saved! Add gspread credentials to secrets.toml")
-        else:
-            st.success("✅ Credentials found in secrets")
-            st.code(f"Service Account: {creds.get('client_email', 'N/A')}")
-        
-        sheet = get_google_sheet()
-        if not sheet:
-            st.error("❌ Cannot connect to Google Sheet")
-            st.warning("Your portfolio is NOT being saved!")
-        else:
-            st.success("✅ Connected to Google Sheet!")
-            try:
-                url = sheet.spreadsheet.url
-                st.code(url)
-                st.markdown(f"[Open Sheet in Browser]({url})")
-            except:
-                st.error("Could not get sheet URL")
-    
-    st.markdown("---")
-    
     # Add stock
     st.markdown("### ➕ Add Stock")
     col1, col2 = st.columns([4, 1])
@@ -1259,7 +1255,7 @@ Best regards,
         st.write(""); st.write("")
         if st.button("Add", type="primary"):
             if ticker_input and ticker_input not in st.session_state.portfolio:
-                st.session_state.portfolio.append(ticker_input)
+                st.session_state.portfolio[ticker_input] = datetime.now().isoformat()
                 update_user_portfolio(st.session_state.user_data['email'], st.session_state.portfolio)
                 st.success(f"✅ Added {ticker_input}")
                 st.rerun()
@@ -1277,9 +1273,17 @@ Best regards,
         
         performance_data = []
         
-        for ticker in st.session_state.portfolio:
+        for ticker, date_added in st.session_state.portfolio.items():
             try:
                 t = yf.Ticker(ticker)
+                
+                # Parse date added
+                try:
+                    added_date = datetime.fromisoformat(date_added.replace('Z', '+00:00'))
+                except:
+                    added_date = datetime.now()
+                
+                days_held = (datetime.now() - added_date).days
                 
                 # Get current price
                 try:
@@ -1324,7 +1328,6 @@ Best regards,
                 
                 # YTD (Year to Date)
                 try:
-                    from datetime import datetime
                     year_start = datetime(datetime.now().year, 1, 1)
                     ytd_data = hist_1y[hist_1y.index >= year_start]
                     if not ytd_data.empty:
@@ -1335,13 +1338,23 @@ Best regards,
                 except:
                     pct_ytd = 0
                 
-                # Since Added (using 1 month as proxy - in future we'll track actual add date)
-                pct_since_added = pct_1m
+                # Since Added - calculate return from actual date added
+                try:
+                    added_data = hist_1y[hist_1y.index >= added_date]
+                    if not added_data.empty and len(added_data) > 0:
+                        price_at_add = added_data["Close"].iloc[0]
+                        pct_since_added = ((current_price / price_at_add) - 1) * 100
+                    else:
+                        pct_since_added = 0
+                except:
+                    pct_since_added = 0
                 
                 performance_data.append({
                     "Symbol": ticker,
                     "Company": company,
                     "Price": current_price,
+                    "Days Held": days_held,
+                    "Added": added_date.strftime("%Y-%m-%d"),
                     "1 Day": pct_1d,
                     "1 Week": pct_1w,
                     "1 Month": pct_1m,
@@ -1444,7 +1457,7 @@ Best regards,
                     st.metric("Current Price", f"${price:,.2f}")
                 with col3:
                     if st.button("🗑️", key=f"del_{ticker}"):
-                        st.session_state.portfolio.remove(ticker)
+                        del st.session_state.portfolio[ticker]
                         update_user_portfolio(st.session_state.user_data['email'], st.session_state.portfolio)
                         st.rerun()
                 st.divider()
