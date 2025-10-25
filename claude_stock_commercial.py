@@ -249,6 +249,21 @@ body > div[class*="layer"], #root > div[class*="layer"], [data-baseweb="layer"]{
 </style>""", unsafe_allow_html=True)
 
 # --------------------------------------------------------------------------------------
+# NEWS FETCHING
+# --------------------------------------------------------------------------------------
+def get_stock_news(ticker: str, max_items: int = 5):
+    """Fetch recent news for a stock ticker"""
+    try:
+        stock = yf.Ticker(ticker)
+        news = stock.news
+        
+        if news and len(news) > 0:
+            return news[:max_items]
+        return []
+    except:
+        return []
+
+# --------------------------------------------------------------------------------------
 # AUTHENTICATION FUNCTIONS (for Portfolio page only)
 # --------------------------------------------------------------------------------------
 def hash_password(password: str) -> str:
