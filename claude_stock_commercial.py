@@ -258,9 +258,24 @@ def get_stock_news(ticker: str, max_items: int = 5):
         news = stock.news
         
         if news and len(news) > 0:
-            return news[:max_items]
+            # Process news items to ensure consistent format
+            processed_news = []
+            for item in news[:max_items]:
+                # Handle different possible keys
+                title = item.get('title') or item.get('headline') or 'No title available'
+                url = item.get('link') or item.get('url') or '#'
+                description = item.get('summary') or item.get('description') or ''
+                
+                processed_news.append({
+                    'title': title,
+                    'url': url,
+                    'description': description,
+                    'publisher': item.get('publisher', 'Unknown')
+                })
+            
+            return processed_news
         return []
-    except:
+    except Exception as e:
         return []
 
 # --------------------------------------------------------------------------------------
@@ -1296,11 +1311,11 @@ Best regards,
     # Display portfolio
     if st.session_state.portfolio:
         st.markdown(f"### 📊 Portfolio Intelligence Dashboard")
-        st.markdown(f"*Tracking {len(st.session_state.portfolio)} stocks*")
         
-        # ============================================================================
-        # PORTFOLIO ANALYTICS SECTION
-        # ============================================================================
+        # Show stocks being tracked prominently
+        st.markdown("#### 📈 Your Stocks")
+        stock_list = ", ".join([f"**{ticker}**" for ticker in st.session_state.portfolio.keys()])
+        st.info(f"Tracking {len(st.session_state.portfolio)} stocks: {stock_list}")
         
         st.markdown("---")
         st.markdown("#### 🎯 Portfolio Health Metrics")
@@ -1741,7 +1756,37 @@ Best regards,
         st.markdown("---")
         
         # Individual Stock Cards with Edit Date & Remove Button
-        st.markdown("### 🏢 Manage Stocks")
+        st.markdown("### 🏢 Manage Your Portfolio")
+        
+        # Quick overview table
+        st.markdown("#### 📋 Quick Overview")
+        manage_data = []
+        for ticker, date_added_str in st.session_state.portfolio.items():
+            try:
+                # Parse date
+                try:
+                    current_date = datetime.fromisoformat(date_added_str.replace('Z', '+00:00')).date()
+                except:
+                    current_date = date.today()
+                
+                company = sp500_df[sp500_df["Symbol"]==ticker]["Security"].iloc[0] if ticker in sp500_df["Symbol"].values else ticker
+                days = (date.today() - current_date).days
+                
+                manage_data.append({
+                    "Ticker": ticker,
+                    "Company": company,
+                    "Tracking Since": current_date.strftime("%Y-%m-%d"),
+                    "Days Held": days
+                })
+            except:
+                pass
+        
+        if manage_data:
+            manage_df = pd.DataFrame(manage_data)
+            st.dataframe(manage_df, use_container_width=True, hide_index=True)
+        
+        st.markdown("#### ✏️ Edit or Remove Stocks")
+        st.caption("Click on any stock below to change its tracking date or remove it")
         
         for ticker, date_added_str in st.session_state.portfolio.items():
             try:
@@ -1754,11 +1799,12 @@ Best regards,
                 except:
                     current_date = date.today()
                 
-                with st.expander(f"📊 **{ticker}** - {company} | ${price:,.2f}"):
+                with st.expander(f"📊 **{ticker}** - {company} | ${price:,.2f}", expanded=False):
                     col1, col2, col3 = st.columns([2, 2, 1])
                     
                     with col1:
-                        st.markdown(f"**Current tracking date:** {current_date}")
+                        st.markdown(f"**Currently tracking from:** {current_date}")
+                        st.caption(f"Days held: {(date.today() - current_date).days}")
                     
                     with col2:
                         new_date = st.date_input(
@@ -1770,7 +1816,7 @@ Best regards,
                         )
                         
                         if new_date != current_date:
-                            if st.button("💾 Save Date", key=f"save_{ticker}"):
+                            if st.button("💾 Save New Date", key=f"save_{ticker}", type="primary"):
                                 new_datetime = datetime.combine(new_date, datetime.min.time())
                                 st.session_state.portfolio[ticker] = new_datetime.isoformat()
                                 update_user_portfolio(st.session_state.user_data['email'], st.session_state.portfolio)
@@ -1778,10 +1824,14 @@ Best regards,
                                 st.rerun()
                     
                     with col3:
-                        if st.button("🗑️ Remove", key=f"del_{ticker}"):
-                            del st.session_state.portfolio[ticker]
-                            update_user_portfolio(st.session_state.user_data['email'], st.session_state.portfolio)
-                            st.rerun()
+                        st.write("")
+                        st.write("")
+                        if st.button("🗑️ Remove Stock", key=f"del_{ticker}", type="secondary"):
+                            if st.button(f"⚠️ Confirm Delete {ticker}", key=f"confirm_del_{ticker}"):
+                                del st.session_state.portfolio[ticker]
+                                update_user_portfolio(st.session_state.user_data['email'], st.session_state.portfolio)
+                                st.success(f"Removed {ticker}")
+                                st.rerun()
                 
             except:
                 pass
