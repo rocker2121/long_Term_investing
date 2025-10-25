@@ -1359,10 +1359,64 @@ Best regards,
                 continue
         
         if portfolio_stocks_data:
-            # ============ PORTFOLIO UNDERVALUATION SCORE ============
-            col1, col2, col3, col4 = st.columns(4)
+            # ============ PORTFOLIO METRICS ============
+            col1, col2, col3, col4, col5 = st.columns(5)
             
             with col1:
+                # Calculate Portfolio Cumulative Return (from tracking dates)
+                total_return_pct = 0
+                valid_returns = 0
+                
+                for ticker, date_added in st.session_state.portfolio.items():
+                    try:
+                        t = yf.Ticker(ticker)
+                        
+                        # Parse date
+                        try:
+                            added_date = datetime.fromisoformat(date_added.replace('Z', '+00:00'))
+                        except:
+                            added_date = datetime.now()
+                        
+                        # Get current price
+                        try:
+                            current_price = t.fast_info.last_price
+                        except:
+                            hist = t.history(period="1d")
+                            current_price = float(hist["Close"][-1]) if not hist.empty else None
+                        
+                        if not current_price:
+                            continue
+                        
+                        # Get historical data
+                        hist_1y = t.history(period="1y")
+                        
+                        if hist_1y.empty:
+                            continue
+                        
+                        # Calculate return from add date
+                        added_data = hist_1y[hist_1y.index >= added_date]
+                        if not added_data.empty and len(added_data) > 0:
+                            price_at_add = added_data["Close"].iloc[0]
+                            return_pct = ((current_price / price_at_add) - 1) * 100
+                            total_return_pct += return_pct
+                            valid_returns += 1
+                    except:
+                        continue
+                
+                if valid_returns > 0:
+                    avg_portfolio_return = total_return_pct / valid_returns
+                    
+                    st.metric(
+                        "💰 Portfolio Return",
+                        f"{avg_portfolio_return:+.2f}%",
+                        f"Since tracking",
+                        delta_color="normal" if avg_portfolio_return >= 0 else "inverse",
+                        help="Average return across all stocks from their tracking dates"
+                    )
+                else:
+                    st.metric("💰 Portfolio Return", "N/A", "No data")
+            
+            with col2:
                 # Calculate Portfolio Average P/E
                 pe_values = [s["pe"] for s in portfolio_stocks_data if s["pe"] and s["pe"] > 0]
                 avg_pe = sum(pe_values) / len(pe_values) if pe_values else None
@@ -1381,7 +1435,7 @@ Best regards,
                 else:
                     st.metric("📊 Valuation Score", "N/A", "No P/E data")
             
-            with col2:
+            with col3:
                 # Portfolio News Sentiment Score
                 sentiment_scores = []
                 
@@ -1411,7 +1465,7 @@ Best regards,
                 else:
                     st.metric("📰 News Sentiment", "N/A", "No news data")
             
-            with col3:
+            with col4:
                 # Sector Diversification Score
                 sectors = [s["sector"] for s in portfolio_stocks_data]
                 unique_sectors = len(set(sectors))
@@ -1424,7 +1478,7 @@ Best regards,
                     help="Portfolio spread across sectors"
                 )
             
-            with col4:
+            with col5:
                 # Quality Score (based on fundamentals)
                 quality_scores = []
                 
@@ -1470,25 +1524,41 @@ Best regards,
                         item["ticker"] = ticker
                         all_news.append(item)
             
-            if all_news and VADER_AVAILABLE:
-                analyzer = SentimentIntensityAnalyzer()
-                
-                for item in all_news[:10]:  # Show top 10
-                    text = f"{item.get('title', '')} {item.get('description', '')}"
-                    score = analyzer.polarity_scores(text)
-                    compound = score['compound']
+            if all_news:
+                if VADER_AVAILABLE:
+                    # Show with sentiment analysis
+                    analyzer = SentimentIntensityAnalyzer()
                     
-                    sentiment_emoji = "🟢" if compound > 0.05 else "🟡" if compound > -0.05 else "🔴"
-                    
-                    col1, col2 = st.columns([1, 10])
-                    with col1:
-                        st.markdown(f"**{item['ticker']}**")
-                    with col2:
-                        st.markdown(f"{sentiment_emoji} [{item.get('title', 'No title')}]({item.get('url', '#')})")
-                        st.caption(item.get('description', '')[:150] + "...")
-                    st.divider()
+                    for item in all_news[:10]:  # Show top 10
+                        text = f"{item.get('title', '')} {item.get('description', '')}"
+                        score = analyzer.polarity_scores(text)
+                        compound = score['compound']
+                        
+                        sentiment_emoji = "🟢" if compound > 0.05 else "🟡" if compound > -0.05 else "🔴"
+                        
+                        col1, col2 = st.columns([1, 10])
+                        with col1:
+                            st.markdown(f"**{item['ticker']}**")
+                        with col2:
+                            st.markdown(f"{sentiment_emoji} [{item.get('title', 'No title')}]({item.get('url', '#')})")
+                            if item.get('description'):
+                                st.caption(item.get('description', '')[:150] + "...")
+                        st.divider()
+                else:
+                    # Show news without sentiment
+                    st.warning("💡 Install VADER for sentiment analysis")
+                    for item in all_news[:10]:
+                        col1, col2 = st.columns([1, 10])
+                        with col1:
+                            st.markdown(f"**{item['ticker']}**")
+                        with col2:
+                            st.markdown(f"[{item.get('title', 'No title')}]({item.get('url', '#')})")
+                            if item.get('description'):
+                                st.caption(item.get('description', '')[:150] + "...")
+                        st.divider()
             else:
-                st.info("News sentiment analysis requires VADER library")
+                st.info("📰 No recent news found. News data may be temporarily unavailable from yfinance.")
+                st.caption("Try refreshing or check back later.")
         
         st.markdown("---")
         
@@ -1826,12 +1896,11 @@ Best regards,
                     with col3:
                         st.write("")
                         st.write("")
-                        if st.button("🗑️ Remove Stock", key=f"del_{ticker}", type="secondary"):
-                            if st.button(f"⚠️ Confirm Delete {ticker}", key=f"confirm_del_{ticker}"):
-                                del st.session_state.portfolio[ticker]
-                                update_user_portfolio(st.session_state.user_data['email'], st.session_state.portfolio)
-                                st.success(f"Removed {ticker}")
-                                st.rerun()
+                        if st.button("🗑️ Remove", key=f"del_{ticker}"):
+                            del st.session_state.portfolio[ticker]
+                            update_user_portfolio(st.session_state.user_data['email'], st.session_state.portfolio)
+                            st.success(f"✅ Removed {ticker}")
+                            st.rerun()
                 
             except:
                 pass
