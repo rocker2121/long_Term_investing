@@ -938,6 +938,46 @@ elif app_mode == "My Portfolio":
     if not sheet:
         st.error("❌ Cannot connect to Google Sheet")
         st.warning("Your portfolio is NOT being saved!")
+        
+        # Show detailed error
+        with st.expander("🔍 Debug: Show Connection Error"):
+            try:
+                import gspread
+                from google.oauth2.service_account import Credentials
+                
+                creds_dict = st.secrets.get("gspread")
+                if creds_dict:
+                    st.write("**Attempting connection...**")
+                    
+                    # Try to connect with detailed error
+                    try:
+                        scopes = [
+                            'https://www.googleapis.com/auth/spreadsheets',
+                            'https://www.googleapis.com/auth/drive'
+                        ]
+                        creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+                        client = gspread.authorize(creds)
+                        st.success("✅ Authorized successfully")
+                        
+                        # Try to open or create sheet
+                        try:
+                            sheet_test = client.open("IntelliInvest_Users")
+                            st.success(f"✅ Sheet found! URL: {sheet_test.url}")
+                        except gspread.SpreadsheetNotFound:
+                            st.warning("Sheet doesn't exist yet, trying to create...")
+                            try:
+                                spreadsheet = client.create("IntelliInvest_Users")
+                                st.success(f"✅ Sheet created! URL: {spreadsheet.url}")
+                            except Exception as e:
+                                st.error(f"❌ Cannot create sheet: {str(e)}")
+                                st.info("💡 Solution: Create the sheet manually in Google Drive")
+                        except Exception as e:
+                            st.error(f"❌ Error opening sheet: {str(e)}")
+                    except Exception as e:
+                        st.error(f"❌ Authorization failed: {str(e)}")
+                        st.code(str(type(e).__name__))
+            except Exception as e:
+                st.error(f"❌ Debug failed: {str(e)}")
     else:
         st.success("✅ Connected to Google Sheet!")
         try:
