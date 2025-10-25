@@ -1107,7 +1107,169 @@ elif app_mode == "My Portfolio":
     
     # Display portfolio
     if st.session_state.portfolio:
-        st.markdown("### 📊 Your Stocks")
+        st.markdown(f"### 📊 Tracking {len(st.session_state.portfolio)} Stocks")
+        
+        # Performance Summary Table
+        st.markdown("#### 📈 Performance Overview")
+        
+        performance_data = []
+        
+        for ticker in st.session_state.portfolio:
+            try:
+                t = yf.Ticker(ticker)
+                
+                # Get current price
+                try:
+                    current_price = t.fast_info.last_price
+                except:
+                    hist = t.history(period="1d")
+                    current_price = float(hist["Close"][-1]) if not hist.empty else None
+                
+                if not current_price:
+                    continue
+                
+                # Get company name
+                company = sp500_df[sp500_df["Symbol"] == ticker]["Security"].iloc[0] if ticker in sp500_df["Symbol"].values else ticker
+                
+                # Get historical data for performance calculation
+                hist_1y = t.history(period="1y")
+                
+                if hist_1y.empty:
+                    continue
+                
+                # Calculate performance metrics
+                # 1 Day
+                try:
+                    price_1d_ago = hist_1y["Close"][-2] if len(hist_1y) >= 2 else current_price
+                    pct_1d = ((current_price / price_1d_ago) - 1) * 100
+                except:
+                    pct_1d = 0
+                
+                # 1 Week
+                try:
+                    price_1w_ago = hist_1y["Close"][-6] if len(hist_1y) >= 6 else current_price
+                    pct_1w = ((current_price / price_1w_ago) - 1) * 100
+                except:
+                    pct_1w = 0
+                
+                # 1 Month
+                try:
+                    price_1m_ago = hist_1y["Close"][-22] if len(hist_1y) >= 22 else current_price
+                    pct_1m = ((current_price / price_1m_ago) - 1) * 100
+                except:
+                    pct_1m = 0
+                
+                # YTD (Year to Date)
+                try:
+                    from datetime import datetime
+                    year_start = datetime(datetime.now().year, 1, 1)
+                    ytd_data = hist_1y[hist_1y.index >= year_start]
+                    if not ytd_data.empty:
+                        price_ytd = ytd_data["Close"].iloc[0]
+                        pct_ytd = ((current_price / price_ytd) - 1) * 100
+                    else:
+                        pct_ytd = 0
+                except:
+                    pct_ytd = 0
+                
+                # Since Added (using 1 month as proxy - in future we'll track actual add date)
+                pct_since_added = pct_1m
+                
+                performance_data.append({
+                    "Symbol": ticker,
+                    "Company": company,
+                    "Price": current_price,
+                    "1 Day": pct_1d,
+                    "1 Week": pct_1w,
+                    "1 Month": pct_1m,
+                    "YTD": pct_ytd,
+                    "Since Added": pct_since_added
+                })
+                
+            except Exception as e:
+                continue
+        
+        if performance_data:
+            # Create DataFrame
+            perf_df = pd.DataFrame(performance_data)
+            
+            # Display summary stats
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                avg_1d = perf_df["1 Day"].mean()
+                st.metric("Portfolio 1D", f"{avg_1d:+.2f}%", 
+                         delta=f"{avg_1d:.2f}%")
+            
+            with col2:
+                avg_1w = perf_df["1 Week"].mean()
+                st.metric("Portfolio 1W", f"{avg_1w:+.2f}%",
+                         delta=f"{avg_1w:.2f}%")
+            
+            with col3:
+                avg_1m = perf_df["1 Month"].mean()
+                st.metric("Portfolio 1M", f"{avg_1m:+.2f}%",
+                         delta=f"{avg_1m:.2f}%")
+            
+            with col4:
+                avg_ytd = perf_df["YTD"].mean()
+                st.metric("Portfolio YTD", f"{avg_ytd:+.2f}%",
+                         delta=f"{avg_ytd:.2f}%")
+            
+            st.markdown("---")
+            
+            # Display detailed table
+            st.markdown("#### 📋 Performance Table")
+            
+            # Format for display
+            display_df = perf_df.copy()
+            display_df["Price"] = display_df["Price"].apply(lambda x: f"${x:,.2f}")
+            
+            for col in ["1 Day", "1 Week", "1 Month", "YTD", "Since Added"]:
+                display_df[col] = display_df[col].apply(lambda x: f"{x:+.2f}%")
+            
+            st.dataframe(
+                display_df,
+                use_container_width=True,
+                hide_index=True,
+                height=min(400, len(display_df) * 35 + 38)
+            )
+            
+            # Chart: Performance Comparison
+            st.markdown("#### 📊 Performance by Period")
+            
+            chart_data = perf_df[["Symbol", "1 Day", "1 Week", "1 Month", "YTD"]].set_index("Symbol")
+            
+            fig = go.Figure()
+            
+            colors = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444']
+            periods = ["1 Day", "1 Week", "1 Month", "YTD"]
+            
+            for i, period in enumerate(periods):
+                fig.add_trace(go.Bar(
+                    name=period,
+                    x=chart_data.index,
+                    y=chart_data[period],
+                    marker_color=colors[i]
+                ))
+            
+            fig.update_layout(
+                barmode='group',
+                title="",
+                xaxis_title="Stock",
+                yaxis_title="Return (%)",
+                height=400,
+                hovermode='x unified',
+                showlegend=True
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+        st.markdown("---")
+        
+        # Individual Stock Cards with Remove Button
+        st.markdown("### 🏢 Manage Stocks")
+        
         for ticker in st.session_state.portfolio:
             try:
                 price = yf.Ticker(ticker).fast_info.last_price
@@ -1116,7 +1278,7 @@ elif app_mode == "My Portfolio":
                 with col1:
                     st.markdown(f"**{ticker}** - {company}")
                 with col2:
-                    st.metric("Price", f"${price:,.2f}")
+                    st.metric("Current Price", f"${price:,.2f}")
                 with col3:
                     if st.button("🗑️", key=f"del_{ticker}"):
                         st.session_state.portfolio.remove(ticker)
