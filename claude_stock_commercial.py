@@ -1243,7 +1243,9 @@ Best regards,
     # DEBUG: Show if Google Sheets is working
     # Add stock
     st.markdown("### ➕ Add Stock")
-    col1, col2 = st.columns([4, 1])
+    
+    col1, col2, col3 = st.columns([3, 2, 1])
+    
     with col1:
         all_symbols = sp500_df["Symbol"].tolist()
         ticker_input = st.selectbox(
@@ -1251,13 +1253,25 @@ Best regards,
             [""] + all_symbols,
             format_func=lambda x: f"{x} - {sp500_df[sp500_df['Symbol']==x]['Security'].iloc[0]}" if x and x in all_symbols else "Select..."
         )
+    
     with col2:
+        # Date picker for tracking start date
+        tracking_date = st.date_input(
+            "Start tracking from",
+            value=date.today(),
+            max_value=date.today(),
+            help="Choose the date you want to track performance from"
+        )
+    
+    with col3:
         st.write(""); st.write("")
         if st.button("Add", type="primary"):
             if ticker_input and ticker_input not in st.session_state.portfolio:
-                st.session_state.portfolio[ticker_input] = datetime.now().isoformat()
+                # Convert date to datetime at market open (9:30 AM ET)
+                tracking_datetime = datetime.combine(tracking_date, datetime.min.time())
+                st.session_state.portfolio[ticker_input] = tracking_datetime.isoformat()
                 update_user_portfolio(st.session_state.user_data['email'], st.session_state.portfolio)
-                st.success(f"✅ Added {ticker_input}")
+                st.success(f"✅ Added {ticker_input} (tracking from {tracking_date})")
                 st.rerun()
             elif ticker_input in st.session_state.portfolio:
                 st.warning(f"⚠️ Already in portfolio")
@@ -1266,7 +1280,188 @@ Best regards,
     
     # Display portfolio
     if st.session_state.portfolio:
-        st.markdown(f"### 📊 Tracking {len(st.session_state.portfolio)} Stocks")
+        st.markdown(f"### 📊 Portfolio Intelligence Dashboard")
+        st.markdown(f"*Tracking {len(st.session_state.portfolio)} stocks*")
+        
+        # ============================================================================
+        # PORTFOLIO ANALYTICS SECTION
+        # ============================================================================
+        
+        st.markdown("---")
+        st.markdown("#### 🎯 Portfolio Health Metrics")
+        
+        # Collect all portfolio data first
+        portfolio_stocks_data = []
+        
+        for ticker, date_added in st.session_state.portfolio.items():
+            try:
+                t = yf.Ticker(ticker)
+                info = t.info
+                
+                # Get current price
+                try:
+                    current_price = t.fast_info.last_price
+                except:
+                    hist = t.history(period="1d")
+                    current_price = float(hist["Close"][-1]) if not hist.empty else None
+                
+                if not current_price:
+                    continue
+                
+                # Get valuation metrics
+                pe_ratio = info.get("forwardPE", info.get("trailingPE", None))
+                pb_ratio = info.get("priceToBook", None)
+                ev_ebitda = info.get("enterpriseToEbitda", None)
+                
+                # Get sector
+                sector = info.get("sector", "Unknown")
+                
+                portfolio_stocks_data.append({
+                    "ticker": ticker,
+                    "price": current_price,
+                    "pe": pe_ratio,
+                    "pb": pb_ratio,
+                    "ev_ebitda": ev_ebitda,
+                    "sector": sector,
+                    "info": info
+                })
+            except:
+                continue
+        
+        if portfolio_stocks_data:
+            # ============ PORTFOLIO UNDERVALUATION SCORE ============
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                # Calculate Portfolio Average P/E
+                pe_values = [s["pe"] for s in portfolio_stocks_data if s["pe"] and s["pe"] > 0]
+                avg_pe = sum(pe_values) / len(pe_values) if pe_values else None
+                
+                if avg_pe:
+                    # Compare to S&P 500 average P/E (~20-25)
+                    sp500_avg_pe = 22
+                    pe_score = max(0, min(100, ((sp500_avg_pe - avg_pe) / sp500_avg_pe) * 100 + 50))
+                    
+                    st.metric(
+                        "📊 Valuation Score",
+                        f"{pe_score:.0f}/100",
+                        f"Avg P/E: {avg_pe:.1f}",
+                        help="Higher = More undervalued vs S&P 500"
+                    )
+                else:
+                    st.metric("📊 Valuation Score", "N/A", "No P/E data")
+            
+            with col2:
+                # Portfolio News Sentiment Score
+                sentiment_scores = []
+                
+                for stock_data in portfolio_stocks_data[:5]:  # Limit to 5 for speed
+                    ticker = stock_data["ticker"]
+                    news_items = get_stock_news(ticker)
+                    
+                    if news_items and VADER_AVAILABLE:
+                        analyzer = SentimentIntensityAnalyzer()
+                        for item in news_items[:3]:  # Top 3 news per stock
+                            text = f"{item.get('title', '')} {item.get('description', '')}"
+                            score = analyzer.polarity_scores(text)
+                            sentiment_scores.append(score['compound'])
+                
+                if sentiment_scores:
+                    avg_sentiment = sum(sentiment_scores) / len(sentiment_scores)
+                    sentiment_pct = (avg_sentiment + 1) * 50  # Convert -1 to 1 → 0 to 100
+                    
+                    sentiment_label = "🟢 Positive" if avg_sentiment > 0.05 else "🟡 Neutral" if avg_sentiment > -0.05 else "🔴 Negative"
+                    
+                    st.metric(
+                        "📰 News Sentiment",
+                        sentiment_label,
+                        f"{sentiment_pct:.0f}/100",
+                        delta=f"{avg_sentiment:+.2f}",
+                        help="Aggregate news sentiment across portfolio"
+                    )
+                else:
+                    st.metric("📰 News Sentiment", "N/A", "No news data")
+            
+            with col3:
+                # Sector Diversification Score
+                sectors = [s["sector"] for s in portfolio_stocks_data]
+                unique_sectors = len(set(sectors))
+                diversification_score = min(100, (unique_sectors / 11) * 100)  # 11 sectors in S&P
+                
+                st.metric(
+                    "🎯 Diversification",
+                    f"{diversification_score:.0f}/100",
+                    f"{unique_sectors} sectors",
+                    help="Portfolio spread across sectors"
+                )
+            
+            with col4:
+                # Quality Score (based on fundamentals)
+                quality_scores = []
+                
+                for stock_data in portfolio_stocks_data:
+                    score = 50  # Base score
+                    
+                    # Good P/E ratio
+                    if stock_data["pe"] and 10 < stock_data["pe"] < 25:
+                        score += 20
+                    
+                    # Good P/B ratio
+                    if stock_data["pb"] and stock_data["pb"] < 3:
+                        score += 15
+                    
+                    # Has EV/EBITDA
+                    if stock_data["ev_ebitda"] and stock_data["ev_ebitda"] < 15:
+                        score += 15
+                    
+                    quality_scores.append(min(100, score))
+                
+                avg_quality = sum(quality_scores) / len(quality_scores) if quality_scores else 0
+                
+                st.metric(
+                    "⭐ Quality Score",
+                    f"{avg_quality:.0f}/100",
+                    "Fundamentals",
+                    help="Based on valuation metrics"
+                )
+        
+        st.markdown("---")
+        
+        # ============ PORTFOLIO NEWS FEED ============
+        with st.expander("📰 Portfolio News Feed", expanded=False):
+            st.markdown("*Latest news across your portfolio*")
+            
+            all_news = []
+            for stock_data in portfolio_stocks_data[:5]:  # Top 5 stocks
+                ticker = stock_data["ticker"]
+                news_items = get_stock_news(ticker)
+                
+                if news_items:
+                    for item in news_items[:2]:  # Top 2 per stock
+                        item["ticker"] = ticker
+                        all_news.append(item)
+            
+            if all_news and VADER_AVAILABLE:
+                analyzer = SentimentIntensityAnalyzer()
+                
+                for item in all_news[:10]:  # Show top 10
+                    text = f"{item.get('title', '')} {item.get('description', '')}"
+                    score = analyzer.polarity_scores(text)
+                    compound = score['compound']
+                    
+                    sentiment_emoji = "🟢" if compound > 0.05 else "🟡" if compound > -0.05 else "🔴"
+                    
+                    col1, col2 = st.columns([1, 10])
+                    with col1:
+                        st.markdown(f"**{item['ticker']}**")
+                    with col2:
+                        st.markdown(f"{sentiment_emoji} [{item.get('title', 'No title')}]({item.get('url', '#')})")
+                        st.caption(item.get('description', '')[:150] + "...")
+                    st.divider()
+            else:
+                st.info("News sentiment analysis requires VADER library")
+        
+        st.markdown("---")
         
         # Performance Summary Table
         st.markdown("#### 📈 Performance Overview")
@@ -1440,27 +1635,140 @@ Best regards,
             )
             
             st.plotly_chart(fig, use_container_width=True)
+        
+        # ============ PORTFOLIO HEAT MAP ============
+        st.markdown("---")
+        st.markdown("#### 🔥 Portfolio Heat Map")
+        
+        if performance_data:
+            # Create heat map data
+            heat_df = pd.DataFrame(performance_data)
+            
+            # Select metrics for heat map
+            metrics = ["1 Day", "1 Week", "1 Month", "YTD", "Since Added"]
+            heat_matrix = heat_df[["Symbol"] + metrics].set_index("Symbol")
+            
+            # Create heat map
+            fig_heat = go.Figure(data=go.Heatmap(
+                z=heat_matrix.values.T,
+                x=heat_matrix.index,
+                y=metrics,
+                colorscale=[
+                    [0, "#d32f2f"],      # Red (negative)
+                    [0.5, "#fff3e0"],    # Light orange (neutral)
+                    [1, "#388e3c"]       # Green (positive)
+                ],
+                zmid=0,
+                text=[[f"{val:+.1f}%" for val in row] for row in heat_matrix.values.T],
+                texttemplate="%{text}",
+                textfont={"size": 10},
+                colorbar=dict(title="Return %"),
+                hovertemplate='<b>%{y}</b><br>%{x}: %{z:.2f}%<extra></extra>'
+            ))
+            
+            fig_heat.update_layout(
+                title="",
+                xaxis_title="Stock",
+                yaxis_title="Time Period",
+                height=300,
+                xaxis={'side': 'bottom'}
+            )
+            
+            st.plotly_chart(fig_heat, use_container_width=True)
+            
+            # Portfolio correlation analysis
+            with st.expander("🔗 Portfolio Correlation Analysis", expanded=False):
+                st.markdown("*How your stocks move together*")
+                
+                if len(st.session_state.portfolio) >= 2:
+                    # Get historical data for correlation
+                    hist_data = {}
+                    for ticker in list(st.session_state.portfolio.keys())[:10]:  # Limit to 10 for performance
+                        try:
+                            t = yf.Ticker(ticker)
+                            hist = t.history(period="3mo")
+                            if not hist.empty:
+                                hist_data[ticker] = hist["Close"].pct_change()
+                        except:
+                            continue
+                    
+                    if len(hist_data) >= 2:
+                        # Create correlation matrix
+                        corr_df = pd.DataFrame(hist_data).corr()
+                        
+                        fig_corr = go.Figure(data=go.Heatmap(
+                            z=corr_df.values,
+                            x=corr_df.columns,
+                            y=corr_df.index,
+                            colorscale="RdYlGn",
+                            zmid=0,
+                            zmin=-1,
+                            zmax=1,
+                            text=[[f"{val:.2f}" for val in row] for row in corr_df.values],
+                            texttemplate="%{text}",
+                            textfont={"size": 9},
+                            colorbar=dict(title="Correlation"),
+                            hovertemplate='<b>%{x} vs %{y}</b><br>Correlation: %{z:.2f}<extra></extra>'
+                        ))
+                        
+                        fig_corr.update_layout(
+                            title="Stock Correlation Matrix (3 months)",
+                            height=400
+                        )
+                        
+                        st.plotly_chart(fig_corr, use_container_width=True)
+                        
+                        st.info("💡 **Tip:** Low correlation (close to 0) means better diversification. High correlation means stocks move together.")
+                    else:
+                        st.warning("Need at least 2 stocks with sufficient history")
+                else:
+                    st.info("Add more stocks to see correlation analysis")
             
         st.markdown("---")
         
-        # Individual Stock Cards with Remove Button
+        # Individual Stock Cards with Edit Date & Remove Button
         st.markdown("### 🏢 Manage Stocks")
         
-        for ticker in st.session_state.portfolio:
+        for ticker, date_added_str in st.session_state.portfolio.items():
             try:
                 price = yf.Ticker(ticker).fast_info.last_price
                 company = sp500_df[sp500_df["Symbol"]==ticker]["Security"].iloc[0] if ticker in sp500_df["Symbol"].values else ticker
-                col1, col2, col3 = st.columns([3, 2, 1])
-                with col1:
-                    st.markdown(f"**{ticker}** - {company}")
-                with col2:
-                    st.metric("Current Price", f"${price:,.2f}")
-                with col3:
-                    if st.button("🗑️", key=f"del_{ticker}"):
-                        del st.session_state.portfolio[ticker]
-                        update_user_portfolio(st.session_state.user_data['email'], st.session_state.portfolio)
-                        st.rerun()
-                st.divider()
+                
+                # Parse date
+                try:
+                    current_date = datetime.fromisoformat(date_added_str.replace('Z', '+00:00')).date()
+                except:
+                    current_date = date.today()
+                
+                with st.expander(f"📊 **{ticker}** - {company} | ${price:,.2f}"):
+                    col1, col2, col3 = st.columns([2, 2, 1])
+                    
+                    with col1:
+                        st.markdown(f"**Current tracking date:** {current_date}")
+                    
+                    with col2:
+                        new_date = st.date_input(
+                            "Change tracking date",
+                            value=current_date,
+                            max_value=date.today(),
+                            key=f"date_{ticker}",
+                            help="Update the date you want to track performance from"
+                        )
+                        
+                        if new_date != current_date:
+                            if st.button("💾 Save Date", key=f"save_{ticker}"):
+                                new_datetime = datetime.combine(new_date, datetime.min.time())
+                                st.session_state.portfolio[ticker] = new_datetime.isoformat()
+                                update_user_portfolio(st.session_state.user_data['email'], st.session_state.portfolio)
+                                st.success(f"✅ Updated tracking date to {new_date}")
+                                st.rerun()
+                    
+                    with col3:
+                        if st.button("🗑️ Remove", key=f"del_{ticker}"):
+                            del st.session_state.portfolio[ticker]
+                            update_user_portfolio(st.session_state.user_data['email'], st.session_state.portfolio)
+                            st.rerun()
+                
             except:
                 pass
         
