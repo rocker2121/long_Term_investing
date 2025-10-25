@@ -1390,8 +1390,7 @@ Best regards,
                     st.metric(
                         "📰 News Sentiment",
                         sentiment_label,
-                        f"{sentiment_pct:.0f}/100",
-                        delta=f"{avg_sentiment:+.2f}",
+                        delta=f"{sentiment_pct:.0f}% (score: {avg_sentiment:+.2f})",
                         help="Aggregate news sentiment across portfolio"
                     )
                 else:
