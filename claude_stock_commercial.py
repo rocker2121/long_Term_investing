@@ -1323,7 +1323,7 @@ Best regards,
         # Collect all portfolio data first
         portfolio_stocks_data = []
         
-        for ticker, date_added in st.session_state.portfolio.items():
+        for ticker, date_added in list(st.session_state.portfolio.items()):
             try:
                 t = yf.Ticker(ticker)
                 info = t.info
@@ -1367,7 +1367,7 @@ Best regards,
                 total_return_pct = 0
                 valid_returns = 0
                 
-                for ticker, date_added in st.session_state.portfolio.items():
+                for ticker, date_added in list(st.session_state.portfolio.items()):
                     try:
                         t = yf.Ticker(ticker)
                         
@@ -1567,7 +1567,7 @@ Best regards,
         
         performance_data = []
         
-        for ticker, date_added in st.session_state.portfolio.items():
+        for ticker, date_added in list(st.session_state.portfolio.items()):
             try:
                 t = yf.Ticker(ticker)
                 
@@ -1831,7 +1831,7 @@ Best regards,
         # Quick overview table
         st.markdown("#### 📋 Quick Overview")
         manage_data = []
-        for ticker, date_added_str in st.session_state.portfolio.items():
+        for ticker, date_added_str in list(st.session_state.portfolio.items()):
             try:
                 # Parse date
                 try:
@@ -1858,7 +1858,8 @@ Best regards,
         st.markdown("#### ✏️ Edit or Remove Stocks")
         st.caption("Click on any stock below to change its tracking date or remove it")
         
-        for ticker, date_added_str in st.session_state.portfolio.items():
+        # Iterate over a copy to avoid RuntimeError when modifying during iteration
+        for ticker, date_added_str in list(st.session_state.portfolio.items()):
             try:
                 price = yf.Ticker(ticker).fast_info.last_price
                 company = sp500_df[sp500_df["Symbol"]==ticker]["Security"].iloc[0] if ticker in sp500_df["Symbol"].values else ticker
