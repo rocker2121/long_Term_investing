@@ -1626,24 +1626,34 @@ Best regards,
                 except:
                     pct_1d = 0
                 
-                # 1 Week
+                # 1 Week (7 days ago)
                 try:
-                    price_1w_ago = hist_data["Close"][-6] if len(hist_1y) >= 6 else current_price
-                    pct_1w = ((current_price / price_1w_ago) - 1) * 100
+                    week_ago = datetime.now() - timedelta(days=7)
+                    week_data = hist_data[hist_data.index >= week_ago]
+                    if not week_data.empty and len(week_data) > 0:
+                        price_1w_ago = week_data["Close"].iloc[0]
+                        pct_1w = ((current_price / price_1w_ago) - 1) * 100
+                    else:
+                        pct_1w = 0
                 except:
                     pct_1w = 0
                 
-                # 1 Month
+                # 1 Month (30 days ago)
                 try:
-                    price_1m_ago = hist_data["Close"][-22] if len(hist_1y) >= 22 else current_price
-                    pct_1m = ((current_price / price_1m_ago) - 1) * 100
+                    month_ago = datetime.now() - timedelta(days=30)
+                    month_data = hist_data[hist_data.index >= month_ago]
+                    if not month_data.empty and len(month_data) > 0:
+                        price_1m_ago = month_data["Close"].iloc[0]
+                        pct_1m = ((current_price / price_1m_ago) - 1) * 100
+                    else:
+                        pct_1m = 0
                 except:
                     pct_1m = 0
                 
                 # YTD (Year to Date)
                 try:
                     year_start = datetime(datetime.now().year, 1, 1)
-                    ytd_data = hist_data[hist_1y.index >= year_start]
+                    ytd_data = hist_data[hist_data.index >= year_start]
                     if not ytd_data.empty:
                         price_ytd = ytd_data["Close"].iloc[0]
                         pct_ytd = ((current_price / price_ytd) - 1) * 100
@@ -1654,7 +1664,7 @@ Best regards,
                 
                 # Since Added - calculate return from actual date added
                 try:
-                    added_data = hist_data[hist_1y.index >= added_date]
+                    added_data = hist_data[hist_data.index >= added_date]
                     if not added_data.empty and len(added_data) > 0:
                         price_at_add = added_data["Close"].iloc[0]
                         pct_since_added = ((current_price / price_at_add) - 1) * 100
