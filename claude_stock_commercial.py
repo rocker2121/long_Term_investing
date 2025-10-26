@@ -1429,15 +1429,27 @@ Best regards,
                 avg_pe = sum(pe_values) / len(pe_values) if pe_values else None
                 
                 if avg_pe:
-                    # Compare to S&P 500 average P/E (~20-25)
+                    # Compare to S&P 500 average P/E (~22)
                     sp500_avg_pe = 22
-                    pe_score = max(0, min(100, ((sp500_avg_pe - avg_pe) / sp500_avg_pe) * 100 + 50))
+                    
+                    # Score: 50 = market average, >50 = cheaper, <50 = expensive
+                    # GOOG P/E 29.1 vs S&P 22: (22-29.1)/22 * 100 + 50 = 17.7
+                    pe_diff_pct = ((sp500_avg_pe - avg_pe) / sp500_avg_pe) * 100
+                    pe_score = max(0, min(100, 50 + pe_diff_pct))
+                    
+                    # Determine if cheap or expensive
+                    if avg_pe < sp500_avg_pe:
+                        valuation_status = "Undervalued"
+                    elif avg_pe > sp500_avg_pe * 1.3:
+                        valuation_status = "Expensive"
+                    else:
+                        valuation_status = "Fair Value"
                     
                     st.metric(
                         "📊 Valuation Score",
                         f"{pe_score:.0f}/100",
-                        f"Avg P/E: {avg_pe:.1f}",
-                        help="Higher = More undervalued vs S&P 500"
+                        valuation_status,
+                        help=f"Your portfolio P/E: {avg_pe:.1f} vs S&P 500: {sp500_avg_pe}\nScore 50 = Market average\nScore >50 = Undervalued (cheap!)\nScore <50 = Overvalued (expensive)\n\nGOOG has P/E of ~29 which is above market average of 22, making it relatively expensive."
                     )
                 else:
                     st.metric("📊 Valuation Score", "N/A", "No P/E data")
@@ -1476,35 +1488,65 @@ Best regards,
                 # Sector Diversification Score
                 sectors = [s["sector"] for s in portfolio_stocks_data]
                 unique_sectors = len(set(sectors))
-                diversification_score = min(100, (unique_sectors / 11) * 100)  # 11 sectors in S&P
+                total_possible_sectors = 11  # S&P 500 has 11 sectors
+                diversification_score = min(100, (unique_sectors / total_possible_sectors) * 100)
+                
+                sector_list = ", ".join(set(sectors))
                 
                 st.metric(
                     "🎯 Diversification",
                     f"{diversification_score:.0f}/100",
-                    f"{unique_sectors} sectors",
-                    help="Portfolio spread across sectors"
+                    f"{unique_sectors} of {total_possible_sectors} sectors",
+                    help=f"Measures sector spread. You have: {sector_list}\n\nS&P 500 has 11 sectors:\n1. Technology\n2. Healthcare\n3. Financials\n4. Consumer Discretionary\n5. Communication Services\n6. Industrials\n7. Consumer Staples\n8. Energy\n9. Utilities\n10. Real Estate\n11. Materials\n\nMore sectors = better diversification = higher score\n\nYour score: {unique_sectors}/11 = {diversification_score:.0f}/100"
                 )
             
             with col5:
                 # Quality Score (based on fundamentals)
                 quality_scores = []
+                quality_details = []
                 
                 for stock_data in portfolio_stocks_data:
                     score = 50  # Base score
+                    details = []
                     
-                    # Good P/E ratio
-                    if stock_data["pe"] and 10 < stock_data["pe"] < 25:
-                        score += 20
+                    # Good P/E ratio (10-25 is ideal)
+                    if stock_data["pe"]:
+                        if 10 < stock_data["pe"] < 25:
+                            score += 20
+                            details.append(f"✓ P/E {stock_data['pe']:.1f} is healthy")
+                        elif stock_data["pe"] > 25:
+                            details.append(f"⚠ P/E {stock_data['pe']:.1f} is high (>25)")
+                        else:
+                            details.append(f"✓ P/E {stock_data['pe']:.1f}")
                     
-                    # Good P/B ratio
-                    if stock_data["pb"] and stock_data["pb"] < 3:
-                        score += 15
+                    # Good P/B ratio (<3 is good)
+                    if stock_data["pb"]:
+                        if stock_data["pb"] < 3:
+                            score += 15
+                            details.append(f"✓ P/B {stock_data['pb']:.1f} is good")
+                        else:
+                            details.append(f"⚠ P/B {stock_data['pb']:.1f} is high")
                     
-                    # Has EV/EBITDA
-                    if stock_data["ev_ebitda"] and stock_data["ev_ebitda"] < 15:
-                        score += 15
+                    # Good EV/EBITDA (<15 is good)
+                    if stock_data["ev_ebitda"]:
+                        if stock_data["ev_ebitda"] < 15:
+                            score += 15
+                            details.append(f"✓ EV/EBITDA {stock_data['ev_ebitda']:.1f} is good")
+                        else:
+                            details.append(f"⚠ EV/EBITDA {stock_data['ev_ebitda']:.1f} is high")
                     
                     quality_scores.append(min(100, score))
+                    quality_details.append(f"{stock_data['ticker']}: {', '.join(details)}")
+                
+                avg_quality = sum(quality_scores) / len(quality_scores) if quality_scores else 0
+                quality_explanation = "\n".join(quality_details)
+                
+                st.metric(
+                    "⭐ Quality Score",
+                    f"{avg_quality:.0f}/100",
+                    "Fundamentals",
+                    help=f"Measures fundamental strength:\n\nScoring:\n• Base: 50 points\n• Good P/E (10-25): +20\n• Good P/B (<3): +15\n• Good EV/EBITDA (<15): +15\n• Max: 100 points\n\nYour portfolio:\n{quality_explanation}\n\nGOOG P/E of 29.1 is above ideal range (10-25), so it loses points on the P/E metric."
+                )
                 
                 avg_quality = sum(quality_scores) / len(quality_scores) if quality_scores else 0
                 
@@ -1518,7 +1560,7 @@ Best regards,
         st.markdown("---")
         
         # ============ PORTFOLIO YEARLY RETURNS ============
-        st.markdown("#### 📅 Portfolio Performance by Year")
+        st.markdown("#### 📅 Portfolio Yearly Performance")
         
         # Calculate yearly returns for portfolio
         yearly_returns = {}
@@ -1583,98 +1625,118 @@ Best regards,
             except:
                 continue
         
-        # Display yearly returns
+        # Display summary metrics and chart
         if yearly_returns:
             years = sorted(yearly_returns.keys())
             
-            # Create columns for each year
-            num_years = len(years)
-            cols = st.columns(min(num_years, 5))  # Max 5 columns per row
-            
-            for i, year in enumerate(years):
-                col_idx = i % 5
-                with cols[col_idx]:
-                    returns = yearly_returns[year]
-                    avg_return = sum(returns) / len(returns)
-                    
-                    # Determine label
-                    if year == current_year:
-                        label = f"{year} (YTD)"
-                    else:
-                        label = str(year)
-                    
-                    st.metric(
-                        label,
-                        f"{avg_return:+.1f}%",
-                        delta=f"{len(returns)} stocks",
-                        delta_color="off",
-                        help=f"Average portfolio return for {year}"
-                    )
-            
-            # Create a line chart showing yearly progression
-            st.markdown("##### 📈 Cumulative Portfolio Growth")
-            
-            yearly_data = []
-            cumulative_return = 0
-            
+            # Calculate average yearly return
+            all_yearly_returns = []
             for year in years:
                 returns = yearly_returns[year]
                 avg_return = sum(returns) / len(returns)
+                all_yearly_returns.append(avg_return)
+            
+            avg_yearly_return = sum(all_yearly_returns) / len(all_yearly_returns) if all_yearly_returns else 0
+            num_years = len(years)
+            
+            # Show one summary metric
+            col1, col2, col3 = st.columns([1, 1, 2])
+            
+            with col1:
+                st.metric(
+                    "📊 Avg Annual Return",
+                    f"{avg_yearly_return:+.1f}%",
+                    f"Across {num_years} year{'s' if num_years > 1 else ''}",
+                    help=f"Average portfolio return per year from {years[0]} to {years[-1]}"
+                )
+            
+            with col2:
+                # Calculate total cumulative return
+                cumulative = 1.0
+                for ret in all_yearly_returns:
+                    cumulative *= (1 + ret/100)
+                total_cumulative = (cumulative - 1) * 100
                 
-                # Calculate cumulative (compound returns)
-                cumulative_return = ((1 + cumulative_return/100) * (1 + avg_return/100) - 1) * 100
+                st.metric(
+                    "🚀 Total Return",
+                    f"{total_cumulative:+.1f}%",
+                    f"Since {years[0]}",
+                    help=f"Cumulative compounded return from {years[0]} to {years[-1]}"
+                )
+            
+            # Create a line chart showing yearly progression
+            with col3:
+                st.markdown("**Year-by-Year Breakdown:**")
+                for year in years:
+                    returns = yearly_returns[year]
+                    avg_return = sum(returns) / len(returns)
+                    label = f"{year} YTD" if year == current_year else str(year)
+                    color = "🟢" if avg_return >= 0 else "🔴"
+                    st.caption(f"{color} **{label}:** {avg_return:+.1f}%")
+            
+            # Create detailed chart
+            with st.expander("📈 View Detailed Yearly Chart", expanded=False):
+                yearly_data = []
+                cumulative_return = 0
                 
-                yearly_data.append({
-                    "Year": str(year),
-                    "Annual Return": round(avg_return, 2),
-                    "Cumulative Return": round(cumulative_return, 2)
-                })
-            
-            yearly_df = pd.DataFrame(yearly_data)
-            
-            # Create line chart
-            fig_yearly = go.Figure()
-            
-            fig_yearly.add_trace(go.Scatter(
-                x=yearly_df["Year"],
-                y=yearly_df["Annual Return"],
-                name="Annual Return",
-                mode='lines+markers',
-                line=dict(color='#1f77b4', width=3),
-                marker=dict(size=10)
-            ))
-            
-            fig_yearly.add_trace(go.Scatter(
-                x=yearly_df["Year"],
-                y=yearly_df["Cumulative Return"],
-                name="Cumulative Return",
-                mode='lines+markers',
-                line=dict(color='#2ca02c', width=3),
-                marker=dict(size=10)
-            ))
-            
-            fig_yearly.update_layout(
-                xaxis_title="Year",
-                yaxis_title="Return (%)",
-                height=400,
-                hovermode='x unified',
-                showlegend=True,
-                yaxis=dict(zeroline=True, zerolinewidth=2, zerolinecolor='gray')
-            )
-            
-            st.plotly_chart(fig_yearly, use_container_width=True)
-            
-            # Show data table
-            st.dataframe(
-                yearly_df,
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "Year": st.column_config.TextColumn("Year", width="small"),
-                    "Annual Return": st.column_config.NumberColumn("Annual Return (%)", format="%.2f%%"),
-                    "Cumulative Return": st.column_config.NumberColumn("Cumulative Return (%)", format="%.2f%%")
-                }
-            )
+                for year in years:
+                    returns = yearly_returns[year]
+                    avg_return = sum(returns) / len(returns)
+                    
+                    # Calculate cumulative (compound returns)
+                    cumulative_return = ((1 + cumulative_return/100) * (1 + avg_return/100) - 1) * 100
+                    
+                    yearly_data.append({
+                        "Year": str(year),
+                        "Annual Return": round(avg_return, 2),
+                        "Cumulative Return": round(cumulative_return, 2)
+                    })
+                
+                yearly_df = pd.DataFrame(yearly_data)
+                
+                # Create line chart
+                fig_yearly = go.Figure()
+                
+                fig_yearly.add_trace(go.Scatter(
+                    x=yearly_df["Year"],
+                    y=yearly_df["Annual Return"],
+                    name="Annual Return",
+                    mode='lines+markers',
+                    line=dict(color='#1f77b4', width=3),
+                    marker=dict(size=10)
+                ))
+                
+                fig_yearly.add_trace(go.Scatter(
+                    x=yearly_df["Year"],
+                    y=yearly_df["Cumulative Return"],
+                    name="Cumulative Return",
+                    mode='lines+markers',
+                    line=dict(color='#2ca02c', width=3),
+                    marker=dict(size=10)
+                ))
+                
+                fig_yearly.update_layout(
+                    xaxis_title="Year",
+                    yaxis_title="Return (%)",
+                    height=400,
+                    hovermode='x unified',
+                    showlegend=True,
+                    yaxis=dict(zeroline=True, zerolinewidth=2, zerolinecolor='gray')
+                )
+                
+                st.plotly_chart(fig_yearly, use_container_width=True)
+                
+                # Show data table
+                st.dataframe(
+                    yearly_df,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Year": st.column_config.TextColumn("Year", width="small"),
+                        "Annual Return": st.column_config.NumberColumn("Annual Return (%)", format="%.2f%%"),
+                        "Cumulative Return": st.column_config.NumberColumn("Cumulative Return (%)", format="%.2f%%")
+                    }
+                )
         else:
             st.info("Add stocks to see yearly performance breakdown")
         
@@ -1682,53 +1744,105 @@ Best regards,
         
         # ============ PORTFOLIO NEWS FEED ============
         with st.expander("📰 Portfolio News Feed", expanded=False):
-            st.markdown("*Latest news across your portfolio*")
+            st.markdown("*Latest forward-looking news across your portfolio*")
+            st.caption("📊 Same news analysis as Single Stock Analysis page")
             
-            all_news = []
-            for stock_data in portfolio_stocks_data[:5]:  # Top 5 stocks
-                ticker = stock_data["ticker"]
-                news_items = get_stock_news(ticker)
+            # Get News API key
+            try:
+                news_api_key = st.secrets.get("NEWS_API_KEY")
+            except:
+                news_api_key = None
+            
+            if not news_api_key:
+                st.warning("📰 **News API Not Configured**")
+                st.markdown("""
+                To enable portfolio news, add your News API key to Streamlit secrets:
                 
-                if news_items:
-                    for item in news_items[:2]:  # Top 2 per stock
-                        item["ticker"] = ticker
-                        all_news.append(item)
-            
-            if all_news:
-                if VADER_AVAILABLE:
-                    # Show with sentiment analysis
-                    analyzer = SentimentIntensityAnalyzer()
-                    
-                    for item in all_news[:10]:  # Show top 10
-                        text = f"{item.get('title', '')} {item.get('description', '')}"
-                        score = analyzer.polarity_scores(text)
-                        compound = score['compound']
-                        
-                        sentiment_emoji = "🟢" if compound > 0.05 else "🟡" if compound > -0.05 else "🔴"
-                        
-                        col1, col2 = st.columns([1, 10])
-                        with col1:
-                            st.markdown(f"**{item['ticker']}**")
-                        with col2:
-                            st.markdown(f"{sentiment_emoji} [{item.get('title', 'No title')}]({item.get('url', '#')})")
-                            if item.get('description'):
-                                st.caption(item.get('description', '')[:150] + "...")
-                        st.divider()
-                else:
-                    # Show news without sentiment
-                    st.warning("💡 Install VADER for sentiment analysis")
-                    for item in all_news[:10]:
-                        col1, col2 = st.columns([1, 10])
-                        with col1:
-                            st.markdown(f"**{item['ticker']}**")
-                        with col2:
-                            st.markdown(f"[{item.get('title', 'No title')}]({item.get('url', '#')})")
-                            if item.get('description'):
-                                st.caption(item.get('description', '')[:150] + "...")
-                        st.divider()
+                1. Get free API key from [newsapi.org](https://newsapi.org)
+                2. Add to `.streamlit/secrets.toml`:
+                ```toml
+                NEWS_API_KEY = "your_api_key_here"
+                ```
+                """)
             else:
-                st.info("📰 No recent news found. News data may be temporarily unavailable from yfinance.")
-                st.caption("Try refreshing or check back later.")
+                # Get news for each stock using the same function as main page
+                all_portfolio_news = []
+                
+                for stock_data in portfolio_stocks_data[:5]:  # Top 5 stocks
+                    ticker = stock_data["ticker"]
+                    
+                    # Get company name
+                    try:
+                        t = yf.Ticker(ticker)
+                        info = t.info
+                        company_name = info.get("longName", ticker)
+                    except:
+                        company_name = ticker
+                    
+                    # Use the SAME function as main page
+                    result = analyze_news_sentiment(news_api_key, company_name, min_articles=1)
+                    
+                    if isinstance(result, tuple) and len(result) == 4:
+                        pos_pct, neg_pct, article_count, article_list = result
+                        
+                        # Add ticker to each article
+                        for article in article_list[:3]:  # Top 3 per stock
+                            article["ticker"] = ticker
+                            article["company"] = company_name
+                            all_portfolio_news.append(article)
+                
+                if all_portfolio_news:
+                    # Display news with sentiment (same style as main page)
+                    if VADER_AVAILABLE:
+                        analyzer = SentimentIntensityAnalyzer()
+                        
+                        for article in all_portfolio_news[:12]:  # Top 12 articles
+                            # Calculate sentiment
+                            text = f"{article.get('title', '')} {article.get('description', '')}"
+                            try:
+                                scores = analyzer.polarity_scores(text)
+                                compound = scores['compound']
+                                
+                                if compound >= 0.05:
+                                    sentiment_emoji = "🟢"
+                                    sentiment_label = "Positive"
+                                elif compound <= -0.05:
+                                    sentiment_emoji = "🔴"
+                                    sentiment_label = "Negative"
+                                else:
+                                    sentiment_emoji = "🟡"
+                                    sentiment_label = "Neutral"
+                            except:
+                                sentiment_emoji = "⚪"
+                                sentiment_label = "Unknown"
+                            
+                            # Display article
+                            col1, col2 = st.columns([1, 10])
+                            with col1:
+                                st.markdown(f"**{article['ticker']}**")
+                                st.caption(sentiment_emoji)
+                            with col2:
+                                st.markdown(f"**[{article.get('title')}]({article.get('link', '#')})**")
+                                st.caption(f"📰 {article.get('publisher', 'Unknown')} • {sentiment_label}")
+                            
+                            st.divider()
+                    else:
+                        # No sentiment analyzer
+                        for article in all_portfolio_news[:12]:
+                            col1, col2 = st.columns([1, 10])
+                            with col1:
+                                st.markdown(f"**{article['ticker']}**")
+                            with col2:
+                                st.markdown(f"**[{article.get('title')}]({article.get('link', '#')})**")
+                                st.caption(f"📰 {article.get('publisher', 'Unknown')}")
+                            
+                            st.divider()
+                    
+                    st.success(f"✅ Showing {len(all_portfolio_news)} forward-looking articles")
+                    st.caption("*Filtered for earnings, forecasts, analyst ratings, and future outlook news*")
+                else:
+                    st.info("📰 No forward-looking news articles found in the last 28 days")
+                    st.caption("The system filters for earnings, forecasts, and analyst news only.")
         
         st.markdown("---")
         
