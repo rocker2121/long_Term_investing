@@ -1517,6 +1517,169 @@ Best regards,
         
         st.markdown("---")
         
+        # ============ PORTFOLIO YEARLY RETURNS ============
+        st.markdown("#### 📅 Portfolio Performance by Year")
+        
+        # Calculate yearly returns for portfolio
+        yearly_returns = {}
+        current_year = datetime.now().year
+        
+        for ticker, date_added in list(st.session_state.portfolio.items()):
+            try:
+                t = yf.Ticker(ticker)
+                
+                # Parse date added
+                try:
+                    added_date = datetime.fromisoformat(date_added.replace('Z', '+00:00'))
+                except:
+                    added_date = datetime.now()
+                
+                # Get full historical data from add date
+                start_date = added_date - timedelta(days=30)  # Buffer
+                hist_data = t.history(start=start_date.strftime("%Y-%m-%d"))
+                
+                if hist_data.empty:
+                    continue
+                
+                # Calculate returns for each year
+                start_year = added_date.year
+                
+                for year in range(start_year, current_year + 1):
+                    try:
+                        year_start = datetime(year, 1, 1)
+                        year_end = datetime(year, 12, 31)
+                        
+                        # For the year stock was added, start from add date
+                        if year == start_year:
+                            year_start = added_date
+                        
+                        # For current year, end at today
+                        if year == current_year:
+                            year_end = datetime.now()
+                        
+                        # Get prices at start and end of period
+                        start_prices = []
+                        end_prices = []
+                        
+                        for idx, row in hist_data.iterrows():
+                            if idx.date() >= year_start.date() and not start_prices:
+                                start_prices.append(float(row["Close"]))
+                            if idx.date() >= year_end.date() and not end_prices:
+                                end_prices.append(float(row["Close"]))
+                        
+                        # If year is complete or current, use last available price
+                        if not end_prices and year == current_year:
+                            end_prices = [float(hist_data["Close"].iloc[-1])]
+                        
+                        if start_prices and end_prices:
+                            year_return = ((end_prices[0] / start_prices[0]) - 1) * 100
+                            
+                            if year not in yearly_returns:
+                                yearly_returns[year] = []
+                            yearly_returns[year].append(year_return)
+                    except:
+                        continue
+                        
+            except:
+                continue
+        
+        # Display yearly returns
+        if yearly_returns:
+            years = sorted(yearly_returns.keys())
+            
+            # Create columns for each year
+            num_years = len(years)
+            cols = st.columns(min(num_years, 5))  # Max 5 columns per row
+            
+            for i, year in enumerate(years):
+                col_idx = i % 5
+                with cols[col_idx]:
+                    returns = yearly_returns[year]
+                    avg_return = sum(returns) / len(returns)
+                    
+                    # Determine label
+                    if year == current_year:
+                        label = f"{year} (YTD)"
+                    else:
+                        label = str(year)
+                    
+                    st.metric(
+                        label,
+                        f"{avg_return:+.1f}%",
+                        delta=f"{len(returns)} stocks",
+                        delta_color="off",
+                        help=f"Average portfolio return for {year}"
+                    )
+            
+            # Create a line chart showing yearly progression
+            st.markdown("##### 📈 Cumulative Portfolio Growth")
+            
+            yearly_data = []
+            cumulative_return = 0
+            
+            for year in years:
+                returns = yearly_returns[year]
+                avg_return = sum(returns) / len(returns)
+                
+                # Calculate cumulative (compound returns)
+                cumulative_return = ((1 + cumulative_return/100) * (1 + avg_return/100) - 1) * 100
+                
+                yearly_data.append({
+                    "Year": str(year),
+                    "Annual Return": round(avg_return, 2),
+                    "Cumulative Return": round(cumulative_return, 2)
+                })
+            
+            yearly_df = pd.DataFrame(yearly_data)
+            
+            # Create line chart
+            fig_yearly = go.Figure()
+            
+            fig_yearly.add_trace(go.Scatter(
+                x=yearly_df["Year"],
+                y=yearly_df["Annual Return"],
+                name="Annual Return",
+                mode='lines+markers',
+                line=dict(color='#1f77b4', width=3),
+                marker=dict(size=10)
+            ))
+            
+            fig_yearly.add_trace(go.Scatter(
+                x=yearly_df["Year"],
+                y=yearly_df["Cumulative Return"],
+                name="Cumulative Return",
+                mode='lines+markers',
+                line=dict(color='#2ca02c', width=3),
+                marker=dict(size=10)
+            ))
+            
+            fig_yearly.update_layout(
+                xaxis_title="Year",
+                yaxis_title="Return (%)",
+                height=400,
+                hovermode='x unified',
+                showlegend=True,
+                yaxis=dict(zeroline=True, zerolinewidth=2, zerolinecolor='gray')
+            )
+            
+            st.plotly_chart(fig_yearly, use_container_width=True)
+            
+            # Show data table
+            st.dataframe(
+                yearly_df,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Year": st.column_config.TextColumn("Year", width="small"),
+                    "Annual Return": st.column_config.NumberColumn("Annual Return (%)", format="%.2f%%"),
+                    "Cumulative Return": st.column_config.NumberColumn("Cumulative Return (%)", format="%.2f%%")
+                }
+            )
+        else:
+            st.info("Add stocks to see yearly performance breakdown")
+        
+        st.markdown("---")
+        
         # ============ PORTFOLIO NEWS FEED ============
         with st.expander("📰 Portfolio News Feed", expanded=False):
             st.markdown("*Latest news across your portfolio*")
