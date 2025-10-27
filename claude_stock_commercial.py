@@ -1455,19 +1455,42 @@ Best regards,
                     st.metric("📊 Valuation Score", "N/A", "No P/E data")
             
             with col3:
-                # Portfolio News Sentiment Score
+                # Portfolio News Sentiment Score - using same News API as feed
                 sentiment_scores = []
                 
-                for stock_data in portfolio_stocks_data[:5]:  # Limit to 5 for speed
-                    ticker = stock_data["ticker"]
-                    news_items = get_stock_news(ticker)
-                    
-                    if news_items and VADER_AVAILABLE:
-                        analyzer = SentimentIntensityAnalyzer()
-                        for item in news_items[:3]:  # Top 3 news per stock
-                            text = f"{item.get('title', '')} {item.get('description', '')}"
-                            score = analyzer.polarity_scores(text)
-                            sentiment_scores.append(score['compound'])
+                # Get News API key
+                try:
+                    news_api_key = st.secrets.get("NEWS_API_KEY")
+                except:
+                    news_api_key = None
+                
+                if news_api_key and VADER_AVAILABLE:
+                    for stock_data in portfolio_stocks_data[:5]:  # Limit to 5 for speed
+                        ticker = stock_data["ticker"]
+                        
+                        # Get company name
+                        try:
+                            t = yf.Ticker(ticker)
+                            info = t.info
+                            company_name = info.get("longName", ticker)
+                        except:
+                            company_name = ticker
+                        
+                        # Use same news function as feed
+                        result = analyze_news_sentiment(news_api_key, company_name, min_articles=1)
+                        
+                        if isinstance(result, tuple) and len(result) == 4:
+                            pos_pct, neg_pct, article_count, article_list = result
+                            
+                            # Calculate sentiment from articles
+                            analyzer = SentimentIntensityAnalyzer()
+                            for article in article_list[:5]:  # Top 5 per stock
+                                text = f"{article.get('title', '')} {article.get('description', '')}"
+                                try:
+                                    score = analyzer.polarity_scores(text)
+                                    sentiment_scores.append(score['compound'])
+                                except:
+                                    pass
                 
                 if sentiment_scores:
                     avg_sentiment = sum(sentiment_scores) / len(sentiment_scores)
@@ -1479,8 +1502,10 @@ Best regards,
                         "📰 News Sentiment",
                         sentiment_label,
                         delta=f"{sentiment_pct:.0f}% (score: {avg_sentiment:+.2f})",
-                        help="Aggregate news sentiment across portfolio"
+                        help="Sentiment from News API forward-looking articles (same as news feed below)"
                     )
+                elif not news_api_key:
+                    st.metric("📰 News Sentiment", "N/A", "News API not configured")
                 else:
                     st.metric("📰 News Sentiment", "N/A", "No news data")
             
