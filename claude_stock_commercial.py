@@ -1665,8 +1665,219 @@ Best regards,
                     color = "🟢" if avg_return >= 0 else "🔴"
                     st.caption(f"{color} **{label}:** {avg_return:+.1f}%")
             
-            # Create detailed chart
-            with st.expander("📈 View Detailed Yearly Chart", expanded=False):
+            # Create detailed comparison chart
+            with st.expander("📈 Compare Portfolio Performance vs Benchmarks", expanded=False):
+                st.markdown("**Compare your portfolio's cumulative returns against S&P 500 and individual stocks**")
+                
+                # Get comparison stocks
+                col_select1, col_select2 = st.columns([3, 1])
+                with col_select1:
+                    # Multi-select for additional comparison stocks
+                    available_stocks = list(sp500_df["Symbol"].values)
+                    selected_comparison = st.multiselect(
+                        "Add stocks to compare",
+                        available_stocks,
+                        default=[],
+                        help="Select stocks to compare against your portfolio performance"
+                    )
+                
+                # Build comparison data
+                comparison_data = {}
+                
+                # 1. Add Portfolio data
+                portfolio_yearly = []
+                cumulative = 0
+                for year in years:
+                    returns = yearly_returns[year]
+                    avg_return = sum(returns) / len(returns)
+                    cumulative = ((1 + cumulative/100) * (1 + avg_return/100) - 1) * 100
+                    portfolio_yearly.append({
+                        "Year": year,
+                        "Return": cumulative
+                    })
+                comparison_data["Your Portfolio"] = portfolio_yearly
+                
+                # 2. Add S&P 500 data (always shown by default)
+                try:
+                    sp500 = yf.Ticker("^GSPC")
+                    start_year = years[0]
+                    start_date = datetime(start_year, 1, 1)
+                    sp500_hist = sp500.history(start=start_date.strftime("%Y-%m-%d"))
+                    
+                    if not sp500_hist.empty:
+                        sp500_yearly = []
+                        
+                        # Get price at start
+                        start_prices = []
+                        for idx, row in sp500_hist.iterrows():
+                            if idx.date() >= start_date.date():
+                                start_prices.append(float(row["Close"]))
+                                break
+                        
+                        if start_prices:
+                            start_price = start_prices[0]
+                            
+                            for year in years:
+                                year_end = datetime(year, 12, 31) if year != current_year else datetime.now()
+                                
+                                end_prices = []
+                                for idx, row in sp500_hist.iterrows():
+                                    if idx.date() >= year_end.date():
+                                        end_prices.append(float(row["Close"]))
+                                        break
+                                
+                                if not end_prices:
+                                    end_prices = [float(sp500_hist["Close"].iloc[-1])]
+                                
+                                if end_prices:
+                                    cumulative_sp500 = ((end_prices[0] / start_price) - 1) * 100
+                                    sp500_yearly.append({
+                                        "Year": year,
+                                        "Return": cumulative_sp500
+                                    })
+                        
+                        comparison_data["S&P 500"] = sp500_yearly
+                except:
+                    pass
+                
+                # 3. Add selected comparison stocks
+                for ticker in selected_comparison:
+                    try:
+                        stock = yf.Ticker(ticker)
+                        stock_hist = stock.history(start=start_date.strftime("%Y-%m-%d"))
+                        
+                        if not stock_hist.empty:
+                            stock_yearly = []
+                            
+                            # Get start price
+                            start_prices = []
+                            for idx, row in stock_hist.iterrows():
+                                if idx.date() >= start_date.date():
+                                    start_prices.append(float(row["Close"]))
+                                    break
+                            
+                            if start_prices:
+                                start_price = start_prices[0]
+                                
+                                for year in years:
+                                    year_end = datetime(year, 12, 31) if year != current_year else datetime.now()
+                                    
+                                    end_prices = []
+                                    for idx, row in stock_hist.iterrows():
+                                        if idx.date() >= year_end.date():
+                                            end_prices.append(float(row["Close"]))
+                                            break
+                                    
+                                    if not end_prices:
+                                        end_prices = [float(stock_hist["Close"].iloc[-1])]
+                                    
+                                    if end_prices:
+                                        cumulative_stock = ((end_prices[0] / start_price) - 1) * 100
+                                        stock_yearly.append({
+                                            "Year": year,
+                                            "Return": cumulative_stock
+                                        })
+                            
+                            comparison_data[ticker] = stock_yearly
+                    except:
+                        continue
+                
+                # Create comparison chart
+                if comparison_data:
+                    fig_comparison = go.Figure()
+                    
+                    # Define colors
+                    colors = {
+                        "Your Portfolio": "#10B981",  # Green
+                        "S&P 500": "#EF4444",  # Red
+                    }
+                    
+                    # Add each series
+                    for i, (name, data) in enumerate(comparison_data.items()):
+                        if data:
+                            df_temp = pd.DataFrame(data)
+                            
+                            # Assign color
+                            if name in colors:
+                                color = colors[name]
+                                width = 4  # Thicker for portfolio and S&P
+                            else:
+                                # Other stocks get different colors
+                                other_colors = ['#3B82F6', '#F59E0B', '#8B5CF6', '#EC4899', '#14B8A6']
+                                color = other_colors[i % len(other_colors)]
+                                width = 2
+                            
+                            fig_comparison.add_trace(go.Scatter(
+                                x=df_temp["Year"],
+                                y=df_temp["Return"],
+                                name=name,
+                                mode='lines+markers',
+                                line=dict(color=color, width=width),
+                                marker=dict(size=8)
+                            ))
+                    
+                    fig_comparison.update_layout(
+                        title="Cumulative Returns Comparison",
+                        xaxis_title="Year",
+                        yaxis_title="Cumulative Return (%)",
+                        height=500,
+                        hovermode='x unified',
+                        showlegend=True,
+                        legend=dict(
+                            yanchor="top",
+                            y=0.99,
+                            xanchor="left",
+                            x=0.01
+                        ),
+                        yaxis=dict(zeroline=True, zerolinewidth=2, zerolinecolor='gray')
+                    )
+                    
+                    st.plotly_chart(fig_comparison, use_container_width=True)
+                    
+                    # Show comparison table
+                    st.markdown("**📊 Performance Summary**")
+                    
+                    summary_data = []
+                    for name, data in comparison_data.items():
+                        if data:
+                            final_return = data[-1]["Return"]
+                            start_year = data[0]["Year"]
+                            end_year = data[-1]["Year"]
+                            years_held = end_year - start_year + 1
+                            
+                            # Calculate annualized return
+                            if years_held > 0:
+                                annualized = (((1 + final_return/100) ** (1/years_held)) - 1) * 100
+                            else:
+                                annualized = final_return
+                            
+                            summary_data.append({
+                                "Asset": name,
+                                "Total Return": f"{final_return:+.2f}%",
+                                "Annualized": f"{annualized:+.2f}%",
+                                "Period": f"{start_year}-{end_year}"
+                            })
+                    
+                    summary_df = pd.DataFrame(summary_data)
+                    st.dataframe(summary_df, use_container_width=True, hide_index=True)
+                    
+                    # Show outperformance
+                    if "Your Portfolio" in comparison_data and "S&P 500" in comparison_data:
+                        portfolio_return = comparison_data["Your Portfolio"][-1]["Return"]
+                        sp500_return = comparison_data["S&P 500"][-1]["Return"]
+                        outperformance = portfolio_return - sp500_return
+                        
+                        if outperformance > 0:
+                            st.success(f"🎉 Your portfolio **outperformed** the S&P 500 by **{outperformance:+.2f}%**!")
+                        elif outperformance < 0:
+                            st.warning(f"📉 Your portfolio **underperformed** the S&P 500 by **{abs(outperformance):.2f}%**")
+                        else:
+                            st.info("Your portfolio matched the S&P 500 returns")
+                
+                # Also show the simple annual/cumulative table
+                st.markdown("---")
+                st.markdown("**📅 Your Portfolio Year-by-Year**")
+                
                 yearly_data = []
                 cumulative_return = 0
                 
@@ -1685,39 +1896,6 @@ Best regards,
                 
                 yearly_df = pd.DataFrame(yearly_data)
                 
-                # Create line chart
-                fig_yearly = go.Figure()
-                
-                fig_yearly.add_trace(go.Scatter(
-                    x=yearly_df["Year"],
-                    y=yearly_df["Annual Return"],
-                    name="Annual Return",
-                    mode='lines+markers',
-                    line=dict(color='#1f77b4', width=3),
-                    marker=dict(size=10)
-                ))
-                
-                fig_yearly.add_trace(go.Scatter(
-                    x=yearly_df["Year"],
-                    y=yearly_df["Cumulative Return"],
-                    name="Cumulative Return",
-                    mode='lines+markers',
-                    line=dict(color='#2ca02c', width=3),
-                    marker=dict(size=10)
-                ))
-                
-                fig_yearly.update_layout(
-                    xaxis_title="Year",
-                    yaxis_title="Return (%)",
-                    height=400,
-                    hovermode='x unified',
-                    showlegend=True,
-                    yaxis=dict(zeroline=True, zerolinewidth=2, zerolinecolor='gray')
-                )
-                
-                st.plotly_chart(fig_yearly, use_container_width=True)
-                
-                # Show data table
                 st.dataframe(
                     yearly_df,
                     use_container_width=True,
