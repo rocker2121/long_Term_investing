@@ -1360,7 +1360,7 @@ Best regards,
         
         if portfolio_stocks_data:
             # ============ PORTFOLIO METRICS ============
-            col1, col2, col3, col4, col5 = st.columns(5)
+            col1, col2, col3, col4 = st.columns(4)
             
             with col1:
                 # Calculate Portfolio Cumulative Return (from tracking dates)
@@ -1424,35 +1424,58 @@ Best regards,
                     st.metric("💰 Portfolio Return", "N/A", "No data")
             
             with col2:
-                # Calculate Portfolio Average P/E
-                pe_values = [s["pe"] for s in portfolio_stocks_data if s["pe"] and s["pe"] > 0]
-                avg_pe = sum(pe_values) / len(pe_values) if pe_values else None
+                # Calculate Portfolio Valuation Score using SAME method as home page
+                val_df = load_valuation_scores(val_path)
+                valuation_scores = []
+                stock_valuations = []
                 
-                if avg_pe:
-                    # Compare to S&P 500 average P/E (~22)
-                    sp500_avg_pe = 22
+                if not val_df.empty and "Symbol" in val_df.columns:
+                    for stock_data in portfolio_stocks_data:
+                        ticker = stock_data["ticker"]
+                        row = val_df[val_df["Symbol"].str.upper() == ticker.upper()]
+                        if not row.empty and "undervaluation_score" in row.columns:
+                            score = float(row.iloc[0]["undervaluation_score"])
+                            valuation_scores.append(score)
+                            stock_valuations.append({
+                                "ticker": ticker,
+                                "score": score
+                            })
+                
+                if valuation_scores:
+                    avg_valuation = sum(valuation_scores) / len(valuation_scores)
                     
-                    # Score: 50 = market average, >50 = cheaper, <50 = expensive
-                    # GOOG P/E 29.1 vs S&P 22: (22-29.1)/22 * 100 + 50 = 17.7
-                    pe_diff_pct = ((sp500_avg_pe - avg_pe) / sp500_avg_pe) * 100
-                    pe_score = max(0, min(100, 50 + pe_diff_pct))
-                    
-                    # Determine if cheap or expensive
-                    if avg_pe < sp500_avg_pe:
-                        valuation_status = "Undervalued"
-                    elif avg_pe > sp500_avg_pe * 1.3:
-                        valuation_status = "Expensive"
+                    # Same categorization as home page
+                    if avg_valuation <= 3:
+                        label = "Undervalued"
+                        color_emoji = "🟢"
+                    elif avg_valuation <= 7:
+                        label = "Fairly Valued"
+                        color_emoji = "🟡"
                     else:
-                        valuation_status = "Fair Value"
+                        label = "Overvalued"
+                        color_emoji = "🔴"
                     
+                    # Create mini bar chart
                     st.metric(
                         "📊 Valuation Score",
-                        f"{pe_score:.0f}/100",
-                        valuation_status,
-                        help=f"Your portfolio P/E: {avg_pe:.1f} vs S&P 500: {sp500_avg_pe}\nScore 50 = Market average\nScore >50 = Undervalued (cheap!)\nScore <50 = Overvalued (expensive)\n\nGOOG has P/E of ~29 which is above market average of 22, making it relatively expensive."
+                        f"{avg_valuation:.1f}/10",
+                        label,
+                        help=f"Average valuation score (1-10 scale, same as Single Stock Analysis)\n\n1-3: Undervalued (cheap!)\n4-7: Fairly Valued\n8-10: Overvalued (expensive)\n\nYour stocks:\n" + "\n".join([f"• {sv['ticker']}: {sv['score']:.1f}" for sv in stock_valuations])
                     )
+                    
+                    # Show valuation bar below metric
+                    st.markdown(f"""
+                    <div style="margin-top:-10px">
+                        <div style="width:100%;height:8px;background:linear-gradient(to right, #10B981, #FCD34D, #EF4444);border-radius:4px;position:relative">
+                            <div style="position:absolute;left:{(avg_valuation-1)/9*100}%;top:-4px;width:12px;height:12px;background:#1F2937;border-radius:50%;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.2)"></div>
+                        </div>
+                        <div style="display:flex;justify-content:space-between;font-size:0.65rem;color:#9CA3AF;margin-top:0.25rem">
+                            <span>1</span><span>5</span><span>10</span>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
                 else:
-                    st.metric("📊 Valuation Score", "N/A", "No P/E data")
+                    st.metric("📊 Valuation Score", "N/A", "No valuation data")
             
             with col3:
                 # Portfolio News Sentiment Score - using same News API as feed
@@ -1523,63 +1546,6 @@ Best regards,
                     f"{diversification_score:.0f}/100",
                     f"{unique_sectors} of {total_possible_sectors} sectors",
                     help=f"Measures sector spread. You have: {sector_list}\n\nS&P 500 has 11 sectors:\n1. Technology\n2. Healthcare\n3. Financials\n4. Consumer Discretionary\n5. Communication Services\n6. Industrials\n7. Consumer Staples\n8. Energy\n9. Utilities\n10. Real Estate\n11. Materials\n\nMore sectors = better diversification = higher score\n\nYour score: {unique_sectors}/11 = {diversification_score:.0f}/100"
-                )
-            
-            with col5:
-                # Quality Score (based on fundamentals)
-                quality_scores = []
-                quality_details = []
-                
-                for stock_data in portfolio_stocks_data:
-                    score = 50  # Base score
-                    details = []
-                    
-                    # Good P/E ratio (10-25 is ideal)
-                    if stock_data["pe"]:
-                        if 10 < stock_data["pe"] < 25:
-                            score += 20
-                            details.append(f"✓ P/E {stock_data['pe']:.1f} is healthy")
-                        elif stock_data["pe"] > 25:
-                            details.append(f"⚠ P/E {stock_data['pe']:.1f} is high (>25)")
-                        else:
-                            details.append(f"✓ P/E {stock_data['pe']:.1f}")
-                    
-                    # Good P/B ratio (<3 is good)
-                    if stock_data["pb"]:
-                        if stock_data["pb"] < 3:
-                            score += 15
-                            details.append(f"✓ P/B {stock_data['pb']:.1f} is good")
-                        else:
-                            details.append(f"⚠ P/B {stock_data['pb']:.1f} is high")
-                    
-                    # Good EV/EBITDA (<15 is good)
-                    if stock_data["ev_ebitda"]:
-                        if stock_data["ev_ebitda"] < 15:
-                            score += 15
-                            details.append(f"✓ EV/EBITDA {stock_data['ev_ebitda']:.1f} is good")
-                        else:
-                            details.append(f"⚠ EV/EBITDA {stock_data['ev_ebitda']:.1f} is high")
-                    
-                    quality_scores.append(min(100, score))
-                    quality_details.append(f"{stock_data['ticker']}: {', '.join(details)}")
-                
-                avg_quality = sum(quality_scores) / len(quality_scores) if quality_scores else 0
-                quality_explanation = "\n".join(quality_details)
-                
-                st.metric(
-                    "⭐ Quality Score",
-                    f"{avg_quality:.0f}/100",
-                    "Fundamentals",
-                    help=f"Measures fundamental strength:\n\nScoring:\n• Base: 50 points\n• Good P/E (10-25): +20\n• Good P/B (<3): +15\n• Good EV/EBITDA (<15): +15\n• Max: 100 points\n\nYour portfolio:\n{quality_explanation}\n\nGOOG P/E of 29.1 is above ideal range (10-25), so it loses points on the P/E metric."
-                )
-                
-                avg_quality = sum(quality_scores) / len(quality_scores) if quality_scores else 0
-                
-                st.metric(
-                    "⭐ Quality Score",
-                    f"{avg_quality:.0f}/100",
-                    "Fundamentals",
-                    help="Based on valuation metrics"
                 )
         
         st.markdown("---")
