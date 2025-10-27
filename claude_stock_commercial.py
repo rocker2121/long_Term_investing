@@ -1829,6 +1829,12 @@ Best regards,
                             xanchor="left",
                             x=0.01
                         ),
+                        xaxis=dict(
+                            tickmode='linear',
+                            tick0=years[0],
+                            dtick=1,
+                            tickformat='d'  # Show as integer, no decimals or commas
+                        ),
                         yaxis=dict(zeroline=True, zerolinewidth=2, zerolinecolor='gray')
                     )
                     
